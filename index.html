@@ -1009,6 +1009,92 @@
 
         /* ===== 模式切換按鈕樣式由 .header-btn 提供（見前段） ===== */
 
+        /* v1.3 關卡教學 modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 500;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.show { display: flex; }
+        .modal-card {
+            background: linear-gradient(135deg, #1e3a5f, #0a1929);
+            color: #fff;
+            padding: 32px 40px;
+            border-radius: 16px;
+            max-width: 480px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            border: 2px solid var(--creafly-cyan, #4dd0e1);
+            text-align: center;
+        }
+        .level-intro-title {
+            font-size: 22px;
+            font-weight: 700;
+            margin-bottom: 16px;
+            color: var(--creafly-yellow, #f1c40f);
+        }
+        .level-intro-body {
+            font-size: 15px;
+            line-height: 1.7;
+            white-space: pre-wrap;
+            text-align: left;
+            margin-bottom: 20px;
+            color: rgba(255,255,255,0.95);
+        }
+        .modal-btn {
+            background: var(--creafly-cyan, #4dd0e1);
+            color: #0a1929;
+            border: none;
+            padding: 10px 32px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .modal-btn:hover { background: #80deea; }
+
+        /* v1.3 關卡選擇器（左下角，老師用） */
+        .level-selector {
+            position: fixed;
+            bottom: 12px;
+            left: 12px;
+            background: rgba(0,0,0,0.7);
+            padding: 8px 12px;
+            border-radius: 8px;
+            z-index: 200;
+            color: #fff;
+            font-size: 12px;
+        }
+        .level-selector-title {
+            font-size: 11px;
+            color: rgba(255,255,255,0.6);
+            margin-bottom: 6px;
+        }
+        .level-selector-btns {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 6px;
+        }
+        .level-btn {
+            background: rgba(255,255,255,0.15);
+            color: #fff;
+            border: 1px solid rgba(255,255,255,0.3);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            cursor: pointer;
+        }
+        .level-btn:hover { background: rgba(255,255,255,0.3); }
+        .level-btn.active { background: var(--creafly-cyan, #4dd0e1); color: #0a1929; }
+        .level-selector-timer {
+            font-family: 'Consolas', monospace;
+            font-size: 13px;
+            color: var(--creafly-yellow, #f1c40f);
+        }
+
         /* ===== 搖桿校正 Wizard ===== */
         #calib-overlay {
             position: fixed;
@@ -1366,6 +1452,29 @@
 <button id="gp-settings-toggle" title="展開 / 收起搖桿設定面板（不擋飛行視線）">⚙ 搖桿設定</button>
 <button id="home-btn" class="header-btn" title="一鍵飛回起飛墊">🏠 回家</button>
 <button id="mute-btn" class="header-btn" title="開關音效">🔊 音效</button>
+
+<!-- v1.3 關卡教學提示 modal -->
+<div id="level-intro" class="modal-overlay">
+    <div class="modal-card">
+        <div class="level-intro-title">關卡載入中…</div>
+        <div class="level-intro-body"></div>
+        <button id="level-intro-start" class="modal-btn">開始</button>
+    </div>
+</div>
+
+<!-- v1.3 關卡選擇器（老師用） -->
+<div id="level-selector" class="level-selector">
+    <div class="level-selector-title">選擇關卡</div>
+    <div class="level-selector-btns">
+        <button class="level-btn" data-level="1-0">1-0 熱身</button>
+        <button class="level-btn" data-level="1-1">1-1 起降</button>
+        <button class="level-btn" data-level="1-2">1-2 水平</button>
+        <button class="level-btn" data-level="1-3">1-3 旋轉</button>
+        <button class="level-btn" data-level="1-4">1-4 鑽圈</button>
+        <button class="level-btn" data-level="1-5">1-5 綜合</button>
+    </div>
+    <div class="level-selector-timer" id="level-timer">⏱ 0.0s</div>
+</div>
 
 <!-- 搖桿校正 Wizard -->
 <div id="calib-overlay">

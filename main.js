@@ -238,27 +238,114 @@ for (let i = 0; i < 30; i++) {
     scene.add(cloud);
 }
 
-// 任務圈 — 簡單 L 形（前進 → 上升 → 右飛 → 上升 → 前進）
-const missionRings = [
-    { x: 0,  y: 8,  z: -10, passed: false, label: 'A' },  // 第一個圈：在正前方 10m、高 8m
-    { x: 10, y: 10, z: -10, passed: false, label: 'B' },  // 第二個圈：右飛 10m + 升 2m
-    { x: 10, y: 12, z: -20, passed: false, label: 'C' },  // 第三個圈：前進 10m + 升 2m
-];
+// v1.3 任務圈：動態載入（由 loadLevel 控制）
+let missionRings = [];
+let rings = [];
+let obstacles = [];
+let currentLevel = null;
+let chapterData = null;
+let levelStartTime = 0;
 
-const rings = missionRings.map((r, idx) => {
-    const ring = new THREE.Mesh(
-        new THREE.TorusGeometry(1.5, 0.12, 16, 32),
-        new THREE.MeshPhongMaterial({
-            color: idx === 0 ? COLOR.yellow : (idx === 1 ? COLOR.primary : COLOR.accent),
-            emissive: idx === 0 ? 0x553300 : 0x003344,
-            shininess: 100
-        })
-    );
-    ring.position.set(r.x, r.y, r.z);
-    ring.userData.idx = idx;
-    scene.add(ring);
-    return ring;
-});
+// 載入 chapter1.json
+fetch('levels/chapter1.json')
+    .then(r => r.json())
+    .then(data => {
+        chapterData = data;
+        console.log(`%c[v1.3 Chapter 1] 載入 ${data.levels.length} 個關卡`, 'color:#4ade80;font-weight:bold');
+        loadLevel('1-0');
+    })
+    .catch(e => console.warn('載入 chapter1.json 失敗：', e));
+
+const ringColors = {
+    red: 0xff4444,
+    yellow: 0xfbbf24,
+    green: 0x4ade80,
+    blue: 0x3b82f6,
+};
+
+function clearLevelObjects() {
+    // 移除所有現有圈
+    rings.forEach(r => scene.remove(r));
+    rings = [];
+    missionRings = [];
+    // 移除所有障礙物
+    obstacles.forEach(o => scene.remove(o));
+    obstacles = [];
+}
+
+function loadLevel(levelId) {
+    if (!chapterData) return;
+    const level = chapterData.levels.find(l => l.id === levelId);
+    if (!level) {
+        console.warn('找不到關卡：', levelId);
+        return;
+    }
+    clearLevelObjects();
+    currentLevel = level;
+
+    // 建立圈
+    rings = level.rings.map((r, idx) => {
+        const color = ringColors[r.color] || COLOR.yellow;
+        const ring = new THREE.Mesh(
+            new THREE.TorusGeometry(1.5, 0.12, 16, 32),
+            new THREE.MeshPhongMaterial({
+                color: color,
+                emissive: color,
+                emissiveIntensity: 0.3,
+                shininess: 100,
+                transparent: true,
+                opacity: 1
+            })
+        );
+        ring.position.set(r.x, r.y, r.z);
+        ring.userData.idx = idx;
+        ring.userData.label = r.label || String(idx + 1);
+        scene.add(ring);
+        missionRings.push({ ...r, passed: false });
+        return ring;
+    });
+    programState.totalRings = rings.length;
+
+    // 建立障礙物（軟方塊）
+    obstacles = (level.obstacles || []).map(o => {
+        const color = o.color ? parseInt(o.color.replace('#',''), 16) : 0x4ade80;
+        const mesh = new THREE.Mesh(
+            new THREE.BoxGeometry(o.size, o.size, o.size),
+            new THREE.MeshPhongMaterial({
+                color: color,
+                transparent: true,
+                opacity: 0.6,
+                emissive: color,
+                emissiveIntensity: 0.2
+            })
+        );
+        mesh.position.set(o.x, o.y, o.z);
+        mesh.userData.soft = true;  // 軟方塊 = 碰到會消失再出現
+        scene.add(mesh);
+        return mesh;
+    });
+
+    // 重置 drone
+    resetDrone();
+    levelStartTime = Date.now();
+    programState.manualComplete = false;
+
+    // 顯示教學提示
+    showLevelIntro(level);
+    setStateHUD(level.hud || level.name);
+}
+
+function showLevelIntro(level) {
+    const modal = document.getElementById('level-intro');
+    if (!modal) return;
+    const titleEl = modal.querySelector('.level-intro-title');
+    const bodyEl = modal.querySelector('.level-intro-body');
+    if (titleEl) titleEl.textContent = `${level.id} · ${level.name}`;
+    if (bodyEl) bodyEl.textContent = level.intro || '';
+    modal.classList.add('show');
+    // 5 秒後自動關閉（學生按開始也關閉）
+    setTimeout(() => modal.classList.remove('show'), level.id === '1-0' ? 8000 : 12000);
+}
 
 // 起點指示
 const startMarker = new THREE.Mesh(
@@ -1965,6 +2052,7 @@ function animate() {
 
     // 不論手動 / 程式模式，每幀都檢查穿圈
     checkRingCollisions();
+    updateLevelTimer();
 
     // 套用到模型
     droneModel.position.copy(droneState.position);
@@ -2359,6 +2447,30 @@ document.getElementById('calib-save').addEventListener('click', () => endCalibra
 
 // v1.3 回家按鈕
 document.getElementById('home-btn').addEventListener('click', goHome);
+
+// v1.3 關卡教學 modal「開始」按鈕
+document.getElementById('level-intro-start').addEventListener('click', () => {
+    document.getElementById('level-intro').classList.remove('show');
+    showToast('▶ 開始！', 'success');
+});
+
+// v1.3 關卡選擇器
+document.querySelectorAll('.level-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const levelId = btn.getAttribute('data-level');
+        document.querySelectorAll('.level-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        loadLevel(levelId);
+    });
+});
+
+// v1.3 計時器更新（每幀）
+function updateLevelTimer() {
+    if (!currentLevel || !levelStartTime) return;
+    const elapsed = (Date.now() - levelStartTime) / 1000;
+    const timerEl = document.getElementById('level-timer');
+    if (timerEl) timerEl.textContent = `⏱ ${elapsed.toFixed(1)}s`;
+}
 
 // v1.3 靜音按鈕
 document.getElementById('mute-btn').addEventListener('click', () => {
