@@ -285,6 +285,42 @@ groundShadow.position.y = 0.05;  // 高於 startMarker 避免閃爍
 groundShadow.renderOrder = 1;  // 在地面之上
 scene.add(groundShadow);
 
+// v1.3 飛行軌跡線：最近 100 個 drone 位置
+const TRAIL_MAX = 100;
+let trailPoints = [];
+let trailLastSample = 0;
+const trailGeometry = new THREE.BufferGeometry();
+const trailPositions = new Float32Array(TRAIL_MAX * 3);
+trailGeometry.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+trailGeometry.setDrawRange(0, 0);
+const trailMaterial = new THREE.LineBasicMaterial({
+    color: 0x66ccff,
+    transparent: true,
+    opacity: 0.7,
+    depthWrite: false,
+});
+const trailLine = new THREE.Line(trailGeometry, trailMaterial);
+trailLine.renderOrder = 2;
+scene.add(trailLine);
+
+function pushTrailPoint(pos) {
+    if (trailPoints.length >= TRAIL_MAX) trailPoints.shift();
+    trailPoints.push(pos.clone());
+    // 寫入 BufferAttribute
+    for (let i = 0; i < trailPoints.length; i++) {
+        trailPositions[i * 3 + 0] = trailPoints[i].x;
+        trailPositions[i * 3 + 1] = trailPoints[i].y;
+        trailPositions[i * 3 + 2] = trailPoints[i].z;
+    }
+    trailGeometry.setDrawRange(0, trailPoints.length);
+    trailGeometry.attributes.position.needsUpdate = true;
+}
+function clearTrail() {
+    trailPoints = [];
+    trailGeometry.setDrawRange(0, 0);
+    trailGeometry.attributes.position.needsUpdate = true;
+}
+
 // =============================================================================
 // 5. 無人機狀態
 // =============================================================================
@@ -1331,6 +1367,7 @@ function resetDrone() {
     missionRings.forEach(r => r.passed = false);
     rings.forEach((r, i) => { r.visible = true; r.material.opacity = 1; });
     programState.ringsCollected = 0;
+    if (typeof clearTrail === 'function') clearTrail();
     updateRingHUD();
     setStateHUD('待命');
 }
@@ -1762,6 +1799,18 @@ function animate() {
         groundShadow.material.color.setHex(0x44ff44);  // 綠 = 回家
     } else {
         groundShadow.material.color.setHex(0x222222);  // 黑 = 正常
+    }
+
+    // v1.3 飛行軌跡：drone 飛過的路徑線（每 0.1s 採樣一次，或移動超過 0.3m）
+    if (droneState.isFlying && !droneState.frozen && !droneState.returning) {
+        const now = performance.now();
+        if (now - trailLastSample > 100) {
+            const last = trailPoints[trailPoints.length - 1];
+            if (!last || last.distanceTo(droneState.position) > 0.3) {
+                pushTrailPoint(droneState.position);
+                trailLastSample = now;
+            }
+        }
     }
 
     // 螺旋槳旋轉
