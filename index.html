@@ -690,6 +690,28 @@
             color: rgba(255,255,255,0.7) !important;
         }
 
+        /* v1.3 回家按鈕（搶眼綠色，讓學生找得到） */
+        #home-btn {
+            position: fixed;
+            top: 12px;
+            right: 480px;
+            z-index: 260;
+            background: linear-gradient(135deg, #4ade80, #16a34a) !important;
+            color: #fff !important;
+            border-color: transparent !important;
+            font-weight: 700 !important;
+            box-shadow: 0 2px 8px rgba(34, 197, 94, 0.5);
+        }
+        #home-btn:hover {
+            background: linear-gradient(135deg, #16a34a, #15803d) !important;
+            box-shadow: 0 4px 12px rgba(34, 197, 94, 0.7);
+        }
+        #home-btn:disabled {
+            background: rgba(255,255,255,0.3) !important;
+            color: rgba(255,255,255,0.7) !important;
+            cursor: not-allowed;
+        }
+
         /* ===== 即時 tuning（反轉 / 死區）===== */
         .gp-tuning {
             margin-top: 8px;
@@ -1155,7 +1177,7 @@
 <div id="app">
     <div id="header">
         <div class="logo">CREAFLY<span class="accent">.</span></div>
-        <span class="version-tag" id="version-tag">v1.2</span>
+        <span class="version-tag" id="version-tag">v1.3</span>
         <div class="subtitle">無人機教育模擬器 · Blockly 程式化飛行</div>
         <div class="header-right">
             <div class="mission-badge" id="mission-name">任務 1：穿過三個圈</div>
@@ -1327,6 +1349,7 @@
 <button id="mode-toggle" class="header-btn">🎮 搖桿</button>
 <button id="calib-fab" class="header-btn header-btn-calib">⚙ 校正搖桿</button>
 <button id="gp-settings-toggle" title="展開 / 收起搖桿設定面板（不擋飛行視線）">⚙ 搖桿設定</button>
+<button id="home-btn" class="header-btn" title="一鍵飛回起飛墊">🏠 回家</button>
 
 <!-- 搖桿校正 Wizard -->
 <div id="calib-overlay">

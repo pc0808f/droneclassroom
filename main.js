@@ -269,6 +269,22 @@ startMarker.position.y = 0.06;
 startMarker.rotation.x = -Math.PI / 2;
 scene.add(startMarker);
 
+// v1.3 地面陰影：drone 投影到地面，幫助國小學生判斷水平位置與高度
+const groundShadow = new THREE.Mesh(
+    new THREE.CircleGeometry(1.0, 32),
+    new THREE.MeshBasicMaterial({
+        color: 0x222222,
+        transparent: true,
+        opacity: 0.35,
+        depthWrite: false,
+        side: THREE.DoubleSide
+    })
+);
+groundShadow.rotation.x = -Math.PI / 2;  // 平貼地面
+groundShadow.position.y = 0.05;  // 高於 startMarker 避免閃爍
+groundShadow.renderOrder = 1;  // 在地面之上
+scene.add(groundShadow);
+
 // =============================================================================
 // 5. 無人機狀態
 // =============================================================================
@@ -279,6 +295,8 @@ const droneState = {
     propellerRotation: 0,
     isFlying: false,                            // 起飛與否
     isGrounded: true,
+    frozen: false,                              // v1.3 緊急停止凍結
+    returning: false,                           // v1.3 回家中
 };
 
 const HOME_POSITION = new THREE.Vector3(0, 0.4, 0);
@@ -296,6 +314,38 @@ window.addEventListener('keyup', e => {
     keys[e.key.toLowerCase()] = false;
     if (e.key === ' ') keys[' '] = false;
 });
+
+// v1.3 空白鍵 = 起飛（地面）/ 緊急停止（空中）/ 恢復（凍結中）
+window.addEventListener('keydown', e => {
+    if (e.key !== ' ' || e.repeat) return;
+    e.preventDefault();
+    if (droneState.isGrounded) {
+        // 起飛：交給 applyManualControls 處理（用 wantsTakeoff）
+        // 這裡什麼都不做
+    } else if (droneState.returning) {
+        // 回家中不處理
+    } else if (droneState.isFlying) {
+        // 空中 → 緊急停止
+        droneState.frozen = true;
+        droneState.velocity.set(0, 0, 0);
+        droneState.angularVelocity = 0;
+        showToast('🛑 緊急停止 — 推桿恢復飛行', 'warning');
+    }
+});
+
+// v1.3 凍結恢復：推桿 / 鍵盤移動 任一輸入就解除
+function isControlInputActive() {
+    if (typeof joystick !== 'undefined' &&
+        (joystick.throttle !== 0 || joystick.yaw !== 0 ||
+         joystick.roll !== 0 || joystick.pitch !== 0)) return true;
+    if (keys['w'] || keys['a'] || keys['s'] || keys['d'] ||
+        keys['shift'] || keys[' ']) return true;
+    if (gamepadState && gamepadState.connected) {
+        const a = gamepadState.axes;
+        if (a && a.some(v => Math.abs(v) > 0.3)) return true;
+    }
+    return false;
+}
 
 // 虛擬搖桿輸入狀態（兩根搖桿，標準 FPV 配置）
 const joystick = {
@@ -429,7 +479,7 @@ const CALIB_STEPS = [
 //   左桿：Y = throttle（升降），X = yaw（旋轉）
 //   右桿：Y = pitch（前後），X = roll（左右）
 //   軸向為 W3C Standard：推上 = -1、推左 = -1
-const APP_VERSION = '1.2';
+const APP_VERSION = '1.3.0';
 // 攔截 Blockly.Extensions.register — 第二次註冊同名 extension 時跳過而非炸掉
 (function safeBlocklyExt() {
     if (typeof Blockly === 'undefined' || !Blockly.Extensions || !Blockly.Extensions.register) return;
@@ -702,6 +752,19 @@ function applyGamepadControls() {
 
 function applyManualControls() {
     if (programState.running) return; // 程式執行中跳過
+
+    // v1.3 緊急停止凍結中：檢查是否有輸入恢復
+    if (droneState.frozen) {
+        if (isControlInputActive()) {
+            droneState.frozen = false;
+            showToast('▶ 恢復飛行', 'success');
+        } else {
+            return; // 凍結中不處理任何控制
+        }
+    }
+
+    // v1.3 回家中：交給 tween 處理，不接受任何控制
+    if (droneState.returning) return;
 
     // 優先級：實體搖桿 > 鍵盤 > 虛擬搖桿（三者可疊加，但搖桿最權威）
     applyGamepadControls();
@@ -1263,11 +1326,57 @@ function resetDrone() {
     droneState.velocity.set(0, 0, 0);
     droneState.isFlying = false;
     droneState.isGrounded = true;
+    droneState.frozen = false;
+    droneState.returning = false;
     missionRings.forEach(r => r.passed = false);
     rings.forEach((r, i) => { r.visible = true; r.material.opacity = 1; });
     programState.ringsCollected = 0;
     updateRingHUD();
     setStateHUD('待命');
+}
+
+// v1.3 回家：一鍵飛回起飛墊（3 秒 tween，期間凍結控制）
+function goHome() {
+    if (droneState.returning) return;
+    if (droneState.isGrounded && droneState.position.distanceTo(HOME_POSITION) < 0.5) {
+        showToast('🏠 已經在起飛墊上了', '');
+        return;
+    }
+    droneState.returning = true;
+    droneState.frozen = false;  // 解除凍結（如果要回家，先取消凍結）
+    droneState.velocity.set(0, 0, 0);
+    const from = droneState.position.clone();
+    const fromYaw = droneState.rotation.y;
+    const dur = 3000;
+    const start = Date.now();
+    const homeBtn = document.getElementById('home-btn');
+    if (homeBtn) homeBtn.disabled = true;
+    showToast('🏠 回家中…', 'success');
+    const step = () => {
+        const t = Math.min((Date.now() - start) / dur, 1);
+        const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;  // easeInOut
+        droneState.position.x = from.x + (HOME_POSITION.x - from.x) * eased;
+        droneState.position.y = from.y + (HOME_POSITION.y - from.y) * eased;
+        droneState.position.z = from.z + (HOME_POSITION.z - from.z) * eased;
+        // 朝向 0（機頭朝 -Z）
+        let yawDiff = fromYaw - 0;
+        while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
+        while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
+        droneState.rotation.y = fromYaw - yawDiff * eased;
+        if (t < 1) {
+            requestAnimationFrame(step);
+        } else {
+            droneState.position.copy(HOME_POSITION);
+            droneState.rotation.set(0, 0, 0);
+            droneState.velocity.set(0, 0, 0);
+            droneState.isFlying = false;
+            droneState.isGrounded = true;
+            droneState.returning = false;
+            if (homeBtn) homeBtn.disabled = false;
+            showToast('🏠 到家了', 'success');
+        }
+    };
+    step();
 }
 
 function setRunningButtons(isRunning) {
@@ -1641,6 +1750,20 @@ function animate() {
     droneModel.position.copy(droneState.position);
     droneModel.rotation.copy(droneState.rotation);
 
+    // v1.3 地面陰影：X/Z 跟著 drone，半徑隨高度變大
+    groundShadow.position.x = droneState.position.x;
+    groundShadow.position.z = droneState.position.z;
+    const shadowRadius = Math.max(0.8, Math.min(2.5, 0.8 + droneState.position.y * 0.1));
+    groundShadow.scale.set(shadowRadius, shadowRadius, 1);
+    // 凍結 / 回家中：陰影變色提示
+    if (droneState.frozen) {
+        groundShadow.material.color.setHex(0xff4444);  // 紅 = 凍結
+    } else if (droneState.returning) {
+        groundShadow.material.color.setHex(0x44ff44);  // 綠 = 回家
+    } else {
+        groundShadow.material.color.setHex(0x222222);  // 黑 = 正常
+    }
+
     // 螺旋槳旋轉
     droneState.propellerRotation += 0.6;
     propellers.forEach((p, i) => {
@@ -2001,6 +2124,9 @@ document.getElementById('calib-fab').addEventListener('click', startCalibration)
 document.getElementById('calib-skip').addEventListener('click', skipCalibStep);
 document.getElementById('calib-cancel').addEventListener('click', () => endCalibration(false));
 document.getElementById('calib-save').addEventListener('click', () => endCalibration(true));
+
+// v1.3 回家按鈕
+document.getElementById('home-btn').addEventListener('click', goHome);
 
 // 互動式 mapping — 點 PS4 視覺上的按鍵進入對映模式
 document.querySelectorAll('#ps4-controller [data-key]').forEach(el => {
