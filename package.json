@@ -7,5 +7,8 @@
     "start": "node server.js"
   },
   "author": "CREAFLY (forked from eccc20984/drone-simulator, MIT)",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.21.0"
+  }
 }

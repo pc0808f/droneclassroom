@@ -501,10 +501,13 @@ function initPlayer() {
         if (!name) { showToast('請輸入名字', 'error'); return; }
         if (!player.emoji) { showToast('請選一個動物', 'error'); return; }
         player.name = name;
-        savePlayer();
-        hideLoginModal();
-        showToast(`✓ 歡迎 ${player.name}${player.emoji}！`, 'success');
-    });
+    savePlayer();
+    hideLoginModal();
+    showToast(`✓ 歡迎 ${player.name}${player.emoji}！`, 'success');
+    window.dispatchEvent(new Event('player-ready'));
+    // 延遲一點連線
+    setTimeout(connectToTeacher, 200);
+});
     // 改名
     document.getElementById('player-rename').addEventListener('click', () => {
         showLoginModal();
@@ -2098,8 +2101,11 @@ function checkRingCollisions() {
     // 手動模式：3 圈都過了也顯示完成（不結束遊戲）
     if (!programState.running && programState.ringsCollected >= programState.totalRings && !programState.manualComplete) {
         programState.manualComplete = true;
-        showToast('🎉 手動模式：3 圈全破！', 'success');
+        const elapsed = Date.now() - levelStartTime;
+        showToast(`🎉 過關！用時 ${(elapsed/1000).toFixed(1)}s`, 'success');
         playCompleteSound();
+        // 上報給老師
+        if (currentLevel) wsReportComplete(currentLevel.id, elapsed);
     }
     // 重置時把 manualComplete 清掉
     if (programState.ringsCollected < programState.totalRings) {
@@ -2585,6 +2591,101 @@ window.addEventListener('keydown', () => {
     ensureAudio();
     if (!audioState.bgmPlaying) startBGM();
 }, { once: false });
+
+// =============================================================================
+// 5.7 v1.3 學生 WebSocket client（連到老師 server）
+// =============================================================================
+const wsState = {
+    ws: null,
+    connected: false,
+    reconnectTimer: null,
+};
+
+function connectToTeacher() {
+    if (wsState.ws && wsState.ws.readyState === 1) return;
+    const url = `ws://${window.location.hostname}:8080/`;
+    try {
+        wsState.ws = new WebSocket(url);
+    } catch (e) {
+        console.warn('WebSocket 連線失敗：', e);
+        scheduleReconnect();
+        return;
+    }
+    wsState.ws.onopen = () => {
+        wsState.connected = true;
+        console.log('[v1.3 WS] 已連線到老師 server');
+        // 註冊玩家
+        if (player.name && player.emoji) {
+            wsState.ws.send(JSON.stringify({
+                type: 'register',
+                name: player.name,
+                emoji: player.emoji
+            }));
+        }
+        showToast('🟢 已連線到課程', 'success');
+    };
+    wsState.ws.onmessage = (ev) => {
+        try {
+            const msg = JSON.parse(ev.data);
+            if (msg.type === 'welcome') {
+                console.log('[v1.3 WS] welcome', msg.id);
+            } else if (msg.type === 'load_level' && chapterData) {
+                const level = chapterData.levels.find(l => l.id === msg.levelId);
+                if (level) {
+                    loadLevel(msg.levelId);
+                    showToast(`📋 老師載入關卡：${level.name}`, 'success');
+                }
+            } else if (msg.type === 'reset_all') {
+                if (currentLevel) loadLevel(currentLevel.id);
+                else resetDrone();
+                showToast('🔄 老師廣播：重置', 'success');
+            } else if (msg.type === 'race_start' && chapterData) {
+                loadLevel(msg.levelId || '1-4');
+                programState.raceStartTime = Date.now();
+                programState.raceActive = true;
+                showToast('🏁 比賽開始！', 'success');
+            } else if (msg.type === 'show_message') {
+                showToast(msg.text || '', msg.level || '');
+            }
+        } catch (e) {}
+    };
+    wsState.ws.onclose = () => {
+        wsState.connected = false;
+        console.log('[v1.3 WS] 連線關閉');
+        scheduleReconnect();
+    };
+    wsState.ws.onerror = (e) => {
+        console.warn('[v1.3 WS] 錯誤', e);
+    };
+}
+
+function scheduleReconnect() {
+    if (wsState.reconnectTimer) return;
+    wsState.reconnectTimer = setTimeout(() => {
+        wsState.reconnectTimer = null;
+        connectToTeacher();
+    }, 3000);
+}
+
+function wsReportComplete(levelId, timeMs) {
+    if (!wsState.connected || !wsState.ws) return;
+    wsState.ws.send(JSON.stringify({
+        type: 'complete_level',
+        levelId,
+        timeMs
+    }));
+}
+
+function wsReportProgress(levelId) {
+    if (!wsState.connected || !wsState.ws) return;
+    wsState.ws.send(JSON.stringify({
+        type: 'progress',
+        levelId
+    }));
+}
+
+// 玩家設好名字後，自動連線 + 註冊
+window.addEventListener('player-ready', connectToTeacher);
 
 // 互動式 mapping — 點 PS4 視覺上的按鍵進入對映模式
 document.querySelectorAll('#ps4-controller [data-key]').forEach(el => {
