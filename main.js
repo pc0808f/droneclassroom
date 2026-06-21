@@ -1401,36 +1401,30 @@ async function cf_right(distance = 2) {
     setStateHUD('飛行中');
 }
 
-async function cf_up(distance = 2) {
+async function cf_hover(seconds = 1) {
     ensureRunning();
-    const from = droneState.position.y;
-    const to = from + distance;
-    setStateHUD(`上升 ${distance}m`);
-    await tween(from, to, distance * 500, v => droneState.position.y = v);
+    setStateHUD(`懸停 ${seconds}s`);
+    await sleep(seconds * 1000);
     setStateHUD('飛行中');
 }
 
-async function cf_down(distance = 2) {
-    return cf_up(-distance);
-}
-
-async function cf_turn_left(angle = 90) {
+async function cf_rotateClockwise(angle = 90) {
     ensureRunning();
     const from = droneState.rotation.y;
-    const to = from + THREE.MathUtils.degToRad(angle);
-    setStateHUD(`左轉 ${angle}°`);
+    // 順時針 = 機頭方向順時鐘 = rotation.y 負方向（從上方看 Y 軸）
+    const to = from - THREE.MathUtils.degToRad(angle);
+    setStateHUD(`順時針 ${angle}°`);
     await tween(from, to, 800, v => droneState.rotation.y = v);
     setStateHUD('飛行中');
 }
 
-async function cf_turn_right(angle = 90) {
-    return cf_turn_left(-angle);
-}
-
-async function cf_wait(seconds = 1) {
+async function cf_rotateCounterClockwise(angle = 90) {
     ensureRunning();
-    setStateHUD(`等待 ${seconds}s`);
-    await sleep(seconds * 1000);
+    const from = droneState.rotation.y;
+    // 逆時針 = rotation.y 正方向
+    const to = from + THREE.MathUtils.degToRad(angle);
+    setStateHUD(`逆時針 ${angle}°`);
+    await tween(from, to, 800, v => droneState.rotation.y = v);
     setStateHUD('飛行中');
 }
 
@@ -1444,18 +1438,17 @@ function ensureRunning() {
 }
 
 // 暴露給 Blockly 用（轉成 JS code 後 eval）
+// v1.4 T-102: 9 個動作 API 對應 9 個 Blockly 積木
 window.CREAFLY = {
     takeoff: cf_takeoff,
     land: cf_land,
+    hover: cf_hover,
     forward: cf_forward,
     backward: cf_backward,
     left: cf_left,
     right: cf_right,
-    up: cf_up,
-    down: cf_down,
-    turn_left: cf_turn_left,
-    turn_right: cf_turn_right,
-    wait: cf_wait,
+    rotateClockwise: cf_rotateClockwise,
+    rotateCounterClockwise: cf_rotateCounterClockwise,
     log: cf_log,
 };
 
@@ -1463,6 +1456,9 @@ window.CREAFLY = {
 // 9. Blockly 整合
 // =============================================================================
 function defineCreaFlyBlocks() {
+    // v1.4 T-102: 9 個動作積木，3 個分類（動作 / 移動 / 旋轉）
+
+    // ========== 動作分類（顏色 160 青綠）==========
     // 起飛
     Blockly.Blocks['cf_takeoff'] = {
         init: function() {
@@ -1475,6 +1471,7 @@ function defineCreaFlyBlocks() {
             this.setPreviousStatement(true, null);
             this.setNextStatement(true, null);
             this.setColour(160);
+            this.setTooltip('垂直上升到指定高度（公尺），最少 1.5m');
         }
     };
     Blockly.JavaScript['cf_takeoff'] = function(block) {
@@ -1490,13 +1487,31 @@ function defineCreaFlyBlocks() {
             this.setPreviousStatement(true, null);
             this.setNextStatement(true, null);
             this.setColour(160);
+            this.setTooltip('緩降回起飛墊');
         }
     };
     Blockly.JavaScript['cf_land'] = function() {
         return 'await CREAFLY.land();\n';
     };
 
-    // 方向動作通用 helper
+    // 懸停
+    Blockly.Blocks['cf_hover'] = {
+        init: function() {
+            this.appendDummyInput().appendField('⏸ 懸停 (秒數)');
+            this.appendValueInput('SEC')
+                .setCheck('Number')
+                .appendField('');
+            this.appendDummyInput().appendField('秒');
+            this.setInputsInline(true);
+            this.setPreviousStatement(true, null);
+            this.setNextStatement(true, null);
+            this.setColour(160);
+            this.setTooltip('在原地懸停 N 秒（不移動、不旋轉）');
+        }
+    };
+    Blockly.JavaScript['cf_hover'] = (b) => `await CREAFLY.hover(${num(b, 'SEC', 1)});\n`;
+
+    // ========== 移動分類（顏色 210 藍）==========
     function makeMoveBlock(name, icon, label) {
         Blockly.Blocks[name] = {
             init: function() {
@@ -1509,42 +1524,22 @@ function defineCreaFlyBlocks() {
                 this.setPreviousStatement(true, null);
                 this.setNextStatement(true, null);
                 this.setColour(210);
+                this.setTooltip(`沿當前機頭方向${label}指定距離（公尺）`);
             }
         };
     }
     makeMoveBlock('cf_forward',  '⬆', '前進');
     makeMoveBlock('cf_backward', '⬇', '後退');
-    makeMoveBlock('cf_left',     '⬅', '左飛');
-    makeMoveBlock('cf_right',    '➡', '右飛');
+    makeMoveBlock('cf_left',     '⬅', '左移');
+    makeMoveBlock('cf_right',    '➡', '右移');
 
     Blockly.JavaScript['cf_forward']  = (b) => `await CREAFLY.forward(${num(b, 'DIST', 2)});\n`;
     Blockly.JavaScript['cf_backward'] = (b) => `await CREAFLY.backward(${num(b, 'DIST', 2)});\n`;
     Blockly.JavaScript['cf_left']     = (b) => `await CREAFLY.left(${num(b, 'DIST', 2)});\n`;
     Blockly.JavaScript['cf_right']    = (b) => `await CREAFLY.right(${num(b, 'DIST', 2)});\n`;
 
-    // 升降
-    function makeAltBlock(name, icon, label) {
-        Blockly.Blocks[name] = {
-            init: function() {
-                this.appendDummyInput().appendField(`${icon} ${label} (距離)`);
-                this.appendValueInput('DIST')
-                    .setCheck('Number')
-                    .appendField('');
-                this.appendDummyInput().appendField('m');
-                this.setInputsInline(true);
-                this.setPreviousStatement(true, null);
-                this.setNextStatement(true, null);
-                this.setColour(290);
-            }
-        };
-    }
-    makeAltBlock('cf_up',   '🔼', '上升');
-    makeAltBlock('cf_down', '🔽', '下降');
-    Blockly.JavaScript['cf_up']   = (b) => `await CREAFLY.up(${num(b, 'DIST', 1)});\n`;
-    Blockly.JavaScript['cf_down'] = (b) => `await CREAFLY.down(${num(b, 'DIST', 1)});\n`;
-
-    // 旋轉
-    function makeTurnBlock(name, icon, label) {
+    // ========== 旋轉分類（顏色 20 橘）==========
+    function makeRotateBlock(name, icon, label) {
         Blockly.Blocks[name] = {
             init: function() {
                 this.appendDummyInput().appendField(`${icon} ${label} (角度)`);
@@ -1556,29 +1551,15 @@ function defineCreaFlyBlocks() {
                 this.setPreviousStatement(true, null);
                 this.setNextStatement(true, null);
                 this.setColour(20);
+                this.setTooltip(`${label}指定角度（從上方看）`);
             }
         };
     }
-    makeTurnBlock('cf_turn_left',  '↪', '左轉');
-    makeTurnBlock('cf_turn_right', '↩', '右轉');
-    Blockly.JavaScript['cf_turn_left']  = (b) => `await CREAFLY.turn_left(${num(b, 'ANGLE', 90)});\n`;
-    Blockly.JavaScript['cf_turn_right'] = (b) => `await CREAFLY.turn_right(${num(b, 'ANGLE', 90)});\n`;
+    makeRotateBlock('cf_rotate_cw',  '↻', '順時針');
+    makeRotateBlock('cf_rotate_ccw', '↺', '逆時針');
 
-    // 等待
-    Blockly.Blocks['cf_wait'] = {
-        init: function() {
-            this.appendDummyInput().appendField('⏱ 等待');
-            this.appendValueInput('SEC')
-                .setCheck('Number')
-                .appendField('');
-            this.appendDummyInput().appendField('秒');
-            this.setInputsInline(true);
-            this.setPreviousStatement(true, null);
-            this.setNextStatement(true, null);
-            this.setColour(65);
-        }
-    };
-    Blockly.JavaScript['cf_wait'] = (b) => `await CREAFLY.wait(${num(b, 'SEC', 1)});\n`;
+    Blockly.JavaScript['cf_rotate_cw']  = (b) => `await CREAFLY.rotateClockwise(${num(b, 'ANGLE', 90)});\n`;
+    Blockly.JavaScript['cf_rotate_ccw'] = (b) => `await CREAFLY.rotateCounterClockwise(${num(b, 'ANGLE', 90)});\n`;
 
     function num(block, name, fallback) {
         return Blockly.JavaScript.valueToCode(block, name,
@@ -1587,64 +1568,53 @@ function defineCreaFlyBlocks() {
 }
 
 function injectBlockly() {
+    // v1.4 T-102: 3 個積木分類（動作 / 移動 / 旋轉）+ 通用控制分類
     const toolbox = `
 <xml id="toolbox" style="display:none">
-  <category name="🛫 起降" colour="160">
+  <category name="🛫 動作" colour="160">
     <block type="cf_takeoff">
       <value name="HEIGHT">
         <block type="math_number"><field name="NUM">8</field></block>
       </value>
     </block>
     <block type="cf_land"></block>
+    <block type="cf_hover">
+      <value name="SEC">
+        <block type="math_number"><field name="NUM">1</field></block>
+      </value>
+    </block>
   </category>
   <category name="🧭 移動" colour="210">
     <block type="cf_forward">
       <value name="DIST">
-        <block type="math_number"><field name="NUM">5</field></block>
+        <block type="math_number"><field name="NUM">2</field></block>
       </value>
     </block>
     <block type="cf_backward">
       <value name="DIST">
-        <block type="math_number"><field name="NUM">5</field></block>
+        <block type="math_number"><field name="NUM">2</field></block>
       </value>
     </block>
     <block type="cf_left">
       <value name="DIST">
-        <block type="math_number"><field name="NUM">3</field></block>
+        <block type="math_number"><field name="NUM">2</field></block>
       </value>
     </block>
     <block type="cf_right">
       <value name="DIST">
-        <block type="math_number"><field name="NUM">3</field></block>
+        <block type="math_number"><field name="NUM">2</field></block>
       </value>
     </block>
   </category>
-  <category name="📐 升降 / 旋轉" colour="290">
-    <block type="cf_up">
-      <value name="DIST">
-        <block type="math_number"><field name="NUM">2</field></block>
-      </value>
-    </block>
-    <block type="cf_down">
-      <value name="DIST">
-        <block type="math_number"><field name="NUM">2</field></block>
-      </value>
-    </block>
-    <block type="cf_turn_left">
+  <category name="🔄 旋轉" colour="20">
+    <block type="cf_rotate_cw">
       <value name="ANGLE">
         <block type="math_number"><field name="NUM">90</field></block>
       </value>
     </block>
-    <block type="cf_turn_right">
+    <block type="cf_rotate_ccw">
       <value name="ANGLE">
         <block type="math_number"><field name="NUM">90</field></block>
-      </value>
-    </block>
-  </category>
-  <category name="⏱ 控制" colour="65">
-    <block type="cf_wait">
-      <value name="SEC">
-        <block type="math_number"><field name="NUM">1</field></block>
       </value>
     </block>
   </category>
@@ -1677,7 +1647,7 @@ function injectBlockly() {
         theme: Blockly.Themes.Modern,
     });
 
-    // 預載範例程式（對齊 missionRings：起飛→前進→上升→右飛→上升→前進→降落）
+    // v1.4 T-102: 預載範例 = 9 個積木展示（起飛 8m → 前進 2m → 順時針 90° → 降落）
     const starterXml = `
 <xml xmlns="https://developers.google.com/blockly/xml">
   <block type="cf_takeoff" x="50" y="50">
@@ -1687,36 +1657,15 @@ function injectBlockly() {
     <next>
       <block type="cf_forward">
         <value name="DIST">
-          <block type="math_number"><field name="NUM">10</field></block>
+          <block type="math_number"><field name="NUM">2</field></block>
         </value>
         <next>
-          <block type="cf_up">
-            <value name="DIST">
-              <block type="math_number"><field name="NUM">2</field></block>
+          <block type="cf_rotate_cw">
+            <value name="ANGLE">
+              <block type="math_number"><field name="NUM">90</field></block>
             </value>
             <next>
-              <block type="cf_right">
-                <value name="DIST">
-                  <block type="math_number"><field name="NUM">10</field></block>
-                </value>
-                <next>
-                  <block type="cf_up">
-                    <value name="DIST">
-                      <block type="math_number"><field name="NUM">2</field></block>
-                    </value>
-                    <next>
-                      <block type="cf_forward">
-                        <value name="DIST">
-                          <block type="math_number"><field name="NUM">10</field></block>
-                        </value>
-                        <next>
-                          <block type="cf_land"></block>
-                        </next>
-                      </block>
-                    </next>
-                  </block>
-                </next>
-              </block>
+              <block type="cf_land"></block>
             </next>
           </block>
         </next>
