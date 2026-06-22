@@ -307,7 +307,7 @@ const SOCCER = {
     prevZ: 0, count: 0, startTime: 0, shuttleReturned: true,
 };
 // 場地尺寸(sim 單位,維持 2:1:1,放大到適合本模擬器的大無人機)
-const SOC = { halfX: 7, halfZ: 14, top: 12, goalZ: 13, goalY: 5, goalR: 2 };
+const SOC = { halfX: 7, halfZ: 14, top: 12, goalZ: 13, goalY: 5, goalR: 2.4, goalTube: 0.22 };
 const GHOST_SPEED = 1.5;     // 鬼飛比較快
 const GHOST_CATCH_R = 2.2;   // 鬼的抓捕範圍（與 server ARENA_CATCH_DIST 一致）
 let myCatchAura = null;      // 自己是鬼時的抓捕光環
@@ -325,6 +325,7 @@ function clampArenaBounds() {
 let _playgroundObj = null, _playgroundLoading = false;
 let _playgroundBVH = null;   // playground 的網格碰撞索引(three-mesh-bvh)
 let _playgroundGeo = null;   // 合併後的碰撞幾何(供測試/除錯)
+let _soccerBVH = null;       // 足球球門框的網格碰撞(門框實心、只能穿中間的洞)
 
 // 用 playground 的所有 mesh(烤進世界座標、只留 position、統一非索引)合併成一個幾何,建 BVH
 function buildPlaygroundCollision(root) {
@@ -352,17 +353,17 @@ function buildPlaygroundCollision(root) {
     }
 }
 
-// 每幀把 drone(視為半徑 DRONE_RADIUS 的球)從 playground 網格推出 → 不能穿過場地結構
+// 每幀把 drone(視為半徑 DRONE_RADIUS 的球)從任一 BVH 網格推出 → 不能穿過該結構
 const _bvhSphere = new THREE.Sphere();
 const _bvhPt = new THREE.Vector3();
 const _bvhDir = new THREE.Vector3();
 const _bvhNormal = new THREE.Vector3();
-function resolvePlaygroundCollision() {
-    if (!_playgroundBVH) return;
+function resolveBVHCollision(bvh) {
+    if (!bvh) return;
     _bvhSphere.center.copy(droneState.position);
     _bvhSphere.radius = DRONE_RADIUS;
     let hit = false;
-    _playgroundBVH.shapecast({
+    bvh.shapecast({
         intersectsBounds: (box) => box.intersectsSphere(_bvhSphere),
         intersectsTriangle: (tri) => {
             tri.closestPointToPoint(_bvhSphere.center, _bvhPt);
@@ -381,6 +382,24 @@ function resolvePlaygroundCollision() {
         droneState.position.copy(_bvhSphere.center);
         droneState.velocity.multiplyScalar(0.4);  // 撞到結構 → 大幅減速
     }
+}
+function resolvePlaygroundCollision() { resolveBVHCollision(_playgroundBVH); }
+// 從一組 mesh 建 BVH（烤進世界座標、只留 position、統一非索引）
+function buildBVHFromMeshes(meshes) {
+    try {
+        const geos = [];
+        meshes.filter(Boolean).forEach(m => {
+            m.updateWorldMatrix(true, false);
+            const g = new THREE.BufferGeometry();
+            g.setAttribute('position', m.geometry.attributes.position.clone());
+            if (m.geometry.index) g.setIndex(m.geometry.index.clone());
+            g.applyMatrix4(m.matrixWorld);
+            geos.push(g.index ? g.toNonIndexed() : g);
+        });
+        if (!geos.length) return null;
+        const merged = mergeGeometries(geos, false);
+        return merged ? new MeshBVH(merged) : null;
+    } catch (e) { console.warn('[BVH] 建立失敗：', e); return null; }
 }
 const BALLOON_COLORS = [0xff4d6d, 0xffd166, 0x4dd0e1, 0x9b5de5, 0x4ade80, 0xff9f1c];
 
@@ -4020,7 +4039,7 @@ const SOCCER_DRILLS = [
 ];
 function makeGoalRing(z, color) {
     const ring = new THREE.Mesh(
-        new THREE.TorusGeometry(SOC.goalR, 0.18, 16, 40),
+        new THREE.TorusGeometry(SOC.goalR, SOC.goalTube, 16, 48),
         new THREE.MeshPhongMaterial({ color, emissive: color, emissiveIntensity: 0.4, shininess: 80 }));
     ring.position.set(0, SOC.goalY, z);   // torus 孔朝 z → 沿長軸穿過
     return ring;
@@ -4030,6 +4049,7 @@ function clearSoccerField() {
     SOCCER.objs = [];
     obstacles = obstacles.filter(o => !(o.userData && o.userData.soccer));
     SOCCER.goalNear = SOCCER.goalFar = null;
+    _soccerBVH = null;
 }
 function buildSoccerField() {
     clearSoccerField();
@@ -4045,6 +4065,8 @@ function buildSoccerField() {
     SOCCER.goalFar = makeGoalRing(-SOC.goalZ, 0xff4444); objs.push(SOCCER.goalFar);   // 遠端紅=攻
     SOCCER.goalNear = makeGoalRing(SOC.goalZ, 0x3b82f6); objs.push(SOCCER.goalNear);  // 近端藍=守
     objs.forEach(o => scene.add(o));
+    // 門框做成實心(網格碰撞)→ 只能從中間的洞穿過,撞到框會被擋
+    _soccerBVH = buildBVHFromMeshes([SOCCER.goalFar, SOCCER.goalNear]);
 }
 function soccerSpawnDummies(on) {
     if (!on) return;
@@ -4121,6 +4143,7 @@ function soccerSpawnDummiesTagged() {
 }
 function soccerTick() {
     clampSoccerBounds();
+    resolveBVHCollision(_soccerBVH);   // 門框實心：撞框被擋、只能穿中間的洞
     const d = SOCCER.drill;
     if (SOCCER.status !== 'running' || !d) { updateSoccerHud(); return; }
     const z = droneState.position.z;
@@ -4326,5 +4349,6 @@ window._creafly = {
     get currentLevel() { return currentLevel; },
     get playgroundBVHReady() { return !!_playgroundBVH; },
     get playgroundGeo() { return _playgroundGeo; },
+    get soccerBVHReady() { return !!_soccerBVH; },
     HOME_POSITION,
 };
