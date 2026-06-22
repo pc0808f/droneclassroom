@@ -307,7 +307,8 @@ const SOCCER = {
     prevZ: 0, count: 0, startTime: 0, shuttleReturned: true,
 };
 // 場地尺寸(sim 單位,維持 2:1:1,放大到適合本模擬器的大無人機)
-const SOC = { halfX: 7, halfZ: 14, top: 12, goalZ: 13, goalY: 5, goalR: 2.4, goalTube: 0.22 };
+// goalZ 往內縮(離端牆 4m)→ 飛機穿門後有空間、不會卡在邊線;goalY 抬高(真實約 2m 的相對高位)
+const SOC = { halfX: 7, halfZ: 14, top: 12, goalZ: 10, goalY: 7, goalR: 2.4, goalTube: 0.22 };
 const GHOST_SPEED = 1.5;     // 鬼飛比較快
 const GHOST_CATCH_R = 2.2;   // 鬼的抓捕範圍（與 server ARENA_CATCH_DIST 一致）
 let myCatchAura = null;      // 自己是鬼時的抓捕光環
@@ -3017,10 +3018,10 @@ function animate() {
 
     // 鏡頭
     if (SOCCER.active && !cameraMode.fpv) {
-        // 足球：窄邊定點視角（站在己方端線、高度 5、看向場內/遠端門）
+        // 足球：窄邊定點視角（站在己方端線後方一大步、略高，看向場內/遠端門）
         if (!droneModel.visible) droneModel.visible = true;
-        camera.position.set(0, 5.5, SOC.halfZ + 4);
-        camera.lookAt(0, 3.5, -4);
+        camera.position.set(0, SOC.goalY + 2, SOC.halfZ + 9);
+        camera.lookAt(0, SOC.goalY - 1.5, -5);
     } else if (cameraMode.fpv) {
         // 第一視角：相機在機身、看機頭方向（略微往下,像 FPV 眼鏡）
         const yawE = new THREE.Euler(0, droneState.rotation.y, 0);
