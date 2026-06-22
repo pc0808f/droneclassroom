@@ -6,11 +6,68 @@
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='52' font-size='52'%3E%F0%9F%9A%9F%3C/text%3E%3C/svg%3E">
     <title>CREAFLY Drone Simulator — 教育用無人機程式化飛行</title>
 
-    <!-- Blockly core (v=1.1 強制重抓 CDN，避免舊版 extension 重複註冊) -->
-    <script src="https://unpkg.com/blockly@10.4.3/blockly.min.js?v=1.1"></script>
-    <script src="https://unpkg.com/blockly@10.4.3/blocks_compressed.js?v=1.1"></script>
-    <script src="https://unpkg.com/blockly@10.4.3/javascript_compressed.js?v=1.1"></script>
-    <script src="https://unpkg.com/blockly@10.4.3/msg/zh-hant.js?v=1.1"></script>
+    <!-- v1.4 B-101-001 fix: 早期 Blockly 防護，必須在 Blockly scripts 載入前執行 -->
+    <script>
+    (function b101001EarlyGuard() {
+        // 1. 用 Set 記住已註冊的 extension 名稱
+        const _seen = new Set();
+        // 2. 全域 error handler：捕捉並降級「already registered」錯誤
+        window.addEventListener('error', function(e) {
+            const msg = (e.error && e.error.message) || e.message || '';
+            if (msg.indexOf('already registered') !== -1) {
+                console.warn('[B-101-001 fix] Suppressed Blockly extension double-registration:', msg);
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                return true;
+            }
+        }, true);
+        // 3. 安裝 Blockly.Extensions.register 攔截器
+        function installWrapper() {
+            if (typeof Blockly === 'undefined' || !Blockly.Extensions || !Blockly.Extensions.register) return false;
+            if (Blockly.Extensions._b101001Patched) return true;  // 已裝過
+            const orig = Blockly.Extensions.register.bind(Blockly.Extensions);
+            Blockly.Extensions.register = function(name, fn) {
+                if (_seen.has(name)) {
+                    console.warn('[B-101-001 fix] Blockly extension "' + name + '" already registered — skip');
+                    return;
+                }
+                _seen.add(name);
+                try {
+                    orig(name, fn);
+                } catch (e) {
+                    console.warn('[B-101-001 fix] Blockly extension "' + name + '" register failed: ' + (e.message || e));
+                }
+            };
+            Blockly.Extensions._b101001Patched = true;
+            return true;
+        }
+        // 立即裝（若 Blockly 已存在）；否則用 Object.defineProperty 攔截 Blockly 賦值
+        if (installWrapper()) return;
+        let _blocklyRef;
+        try {
+            Object.defineProperty(window, 'Blockly', {
+                configurable: true,
+                get() { return _blocklyRef; },
+                set(v) {
+                    _blocklyRef = v;
+                    // Blockly 物件剛被賦值，DOMContentLoaded 前通常已完成
+                    setTimeout(installWrapper, 0);
+                }
+            });
+        } catch (e) {
+            // defineProperty 失敗（很舊的瀏覽器），fallback：等 DOMContentLoaded
+            window.addEventListener('DOMContentLoaded', function() {
+                installWrapper();
+            }, { once: true });
+        }
+    })();
+    </script>
+
+    <!-- Blockly core (v=1.2 強制重抓 CDN，避免舊版 extension 重複註冊) -->
+    <script src="https://unpkg.com/blockly@10.4.3/blockly.min.js?v=1.2"></script>
+    <script src="https://unpkg.com/blockly@10.4.3/blocks_compressed.js?v=1.2"></script>
+    <script src="https://unpkg.com/blockly@10.4.3/javascript_compressed.js?v=1.2"></script>
+    <script src="https://unpkg.com/blockly@10.4.3/msg/zh-hant.js?v=1.2"></script>
 
     <!-- Virtual joystick (nipplejs) for iPad/touch devices -->
     <script src="https://cdn.jsdelivr.net/npm/nipplejs@0.10.2/dist/nipplejs.min.js"></script>
@@ -952,6 +1009,54 @@
             50% { transform: scale(1.2); opacity: 0.7; }
         }
 
+        /* v1.4 6/22 修正 3：過關步驟 progress bar (1-1/1-2/1-3) */
+        #progress-bar {
+            top: 16px;
+            right: 16px;
+            min-width: 240px;
+            max-width: 280px;
+        }
+        #progress-bar h3 {
+            margin: 0 0 8px 0;
+            font-size: 14px;
+            color: var(--creafly-yellow);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        #progress-bar .progress-text {
+            background: rgba(255,255,255,0.2);
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-family: 'Consolas', monospace;
+            font-size: 13px;
+        }
+        #progress-bar .steps {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        #progress-bar .step {
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: rgba(255,255,255,0.7);
+            transition: all 0.3s;
+        }
+        #progress-bar .step.completed {
+            background: var(--creafly-green);
+            border-color: var(--creafly-green);
+            color: white;
+            font-weight: 600;
+            box-shadow: 0 0 8px rgba(27, 153, 139, 0.5);
+        }
+        #progress-bar .step.completed::before {
+            content: '✓ ';
+            color: white;
+        }
+
         /* ===== Footer ===== */
         #footer {
             grid-column: 1 / 3;
@@ -1499,6 +1604,11 @@
                     <div class="ring-dot" id="dot-1"></div>
                     <div class="ring-dot" id="dot-2"></div>
                 </div>
+            </div>
+            <!-- v1.4 6/22 修正 3：1-1/1-2/1-3 過關條件 progress bar -->
+            <div id="progress-bar" class="hud" style="display:none;">
+                <h3>過關步驟 <span class="progress-text" id="progress-text">0/4</span></h3>
+                <div class="steps"></div>
             </div>
             <div id="help-hud" class="hud">
                 <h4>🕹 控制方式</h4>

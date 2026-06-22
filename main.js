@@ -210,6 +210,13 @@ ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
 scene.add(ground);
 
+// v1.4 6/22 修正 1：地面格子線（soccer field grid）— 幫助學生目測水平移動距離
+const groundGrid = new THREE.GridHelper(50, 10, 0xffffff, 0x4dd0e1);
+groundGrid.position.y = 0.01;  // 略高於地面避免 z-fighting
+groundGrid.material.opacity = 0.6;
+groundGrid.material.transparent = true;
+scene.add(groundGrid);
+
 // 起飛台
 const pad = new THREE.Mesh(
     new THREE.CylinderGeometry(1.8, 1.8, 0.1, 32),
@@ -245,6 +252,9 @@ let obstacles = [];
 let currentLevel = null;
 let chapterData = null;
 let levelStartTime = 0;
+// v1.4 6/22 修正 3：1-1/1-2/1-3 過關條件用 pass zone（visible disc + state check）
+let passZoneMeshes = [];
+let passZoneProgress = [];
 
 // 載入 chapter1.json
 fetch('levels/chapter1.json')
@@ -271,6 +281,13 @@ function clearLevelObjects() {
     // 移除所有障礙物
     obstacles.forEach(o => scene.remove(o));
     obstacles = [];
+    // 移除所有 pass zone discs
+    passZoneMeshes.forEach(m => scene.remove(m));
+    passZoneMeshes = [];
+    passZoneProgress = [];
+    // 隱藏 progress bar
+    const bar = document.getElementById('progress-bar');
+    if (bar) bar.style.display = 'none';
 }
 
 function loadLevel(levelId) {
@@ -330,9 +347,116 @@ function loadLevel(levelId) {
     levelStartTime = Date.now();
     programState.manualComplete = false;
 
+    // v1.4 6/22 修正 3：建立 pass zone 視覺 discs + 初始化進度
+    if (level.passZones && level.passZones.length) {
+        passZoneProgress = new Array(level.passZones.length).fill(false);
+        level.passZones.forEach((zone, i) => {
+            // 視覺：地面綠色半透明 disc
+            const disc = new THREE.Mesh(
+                new THREE.RingGeometry(0.6, 1.2, 32),
+                new THREE.MeshBasicMaterial({
+                    color: 0x4ade80,
+                    side: THREE.DoubleSide,
+                    transparent: true,
+                    opacity: 0.4
+                })
+            );
+            disc.rotation.x = -Math.PI / 2;
+            disc.position.set(zone.x || 0, 0.02, zone.z || 0);
+            disc.userData.zoneIndex = i;
+            scene.add(disc);
+            passZoneMeshes.push(disc);
+        });
+        // 初始化 HUD progress bar
+        initProgressBar(level.passZones);
+    }
+
     // 顯示教學提示
     showLevelIntro(level);
     setStateHUD(level.hud || level.name);
+}
+
+// v1.4 6/22 修正 3：每幀檢查 pass zone 過關條件
+function checkPassZones() {
+    if (!currentLevel || !currentLevel.passZones) return;
+    currentLevel.passZones.forEach((zone, i) => {
+        if (passZoneProgress[i]) return;  // 已過
+        let passed = false;
+        if (zone.type === 'altitude') {
+            const y = droneState.position.y;
+            if (zone.minY !== undefined && y < zone.minY) return;
+            if (zone.maxY !== undefined && y > zone.maxY) return;
+            passed = true;
+        } else if (zone.type === 'position') {
+            const x = droneState.position.x;
+            const z = droneState.position.z;
+            if (zone.minX !== undefined && x < zone.minX) return;
+            if (zone.maxX !== undefined && x > zone.maxX) return;
+            if (zone.minZ !== undefined && z < zone.minZ) return;
+            if (zone.maxZ !== undefined && z > zone.maxZ) return;
+            passed = true;
+        } else if (zone.type === 'heading') {
+            // rotation.y 是 Three.js Euler 軸向：正 Y 為逆時針（從上方看）
+            const yawDeg = ((droneState.rotation.y * 180 / Math.PI) % 360 + 360) % 360;
+            const target = ((zone.targetYaw % 360) + 360) % 360;
+            let diff = Math.abs(yawDeg - target);
+            if (diff > 180) diff = 360 - diff;
+            if (diff > (zone.tolerance || 20)) return;
+            passed = true;
+        }
+        if (passed) {
+            passZoneProgress[i] = true;
+            // 視覺回饋：zone disc 變亮
+            const mesh = passZoneMeshes[i];
+            if (mesh) {
+                mesh.material.color.setHex(0x10b981);
+                mesh.material.opacity = 0.8;
+            }
+            updatePassZoneProgress();
+            showToast(`✓ ${zone.label || ('步驟 ' + (i+1))}`, 'success');
+            playRingSound();
+            // 全部過了？
+            if (passZoneProgress.every(p => p)) {
+                showToast('🎉 過關！', 'success');
+                playCompleteSound();
+                if (currentLevel) wsReportComplete(currentLevel.id, Date.now() - levelStartTime);
+                programState.manualComplete = true;
+            }
+        }
+    });
+}
+
+function initProgressBar(zones) {
+    const bar = document.getElementById('progress-bar');
+    if (!bar) return;
+    bar.style.display = 'block';
+    const stepsEl = bar.querySelector('.steps');
+    const textEl = bar.querySelector('.progress-text') || document.getElementById('progress-text');
+    if (stepsEl) {
+        stepsEl.innerHTML = '';
+        zones.forEach((zone, i) => {
+            const step = document.createElement('div');
+            step.className = 'step';
+            step.setAttribute('data-step', i);
+            step.textContent = `${i+1}. ${zone.label || ('步驟 ' + (i+1))}`;
+            stepsEl.appendChild(step);
+        });
+    }
+    if (textEl) textEl.textContent = `0/${zones.length}`;
+}
+
+function updatePassZoneProgress() {
+    if (!currentLevel || !currentLevel.passZones) return;
+    const total = currentLevel.passZones.length;
+    const done = passZoneProgress.filter(p => p).length;
+    const textEl = document.getElementById('progress-text');
+    if (textEl) textEl.textContent = `${done}/${total}`;
+    const bar = document.getElementById('progress-bar');
+    if (bar) {
+        bar.querySelectorAll('.step').forEach((step, i) => {
+            step.classList.toggle('completed', passZoneProgress[i]);
+        });
+    }
 }
 
 function showLevelIntro(level) {
@@ -942,21 +1066,28 @@ const _modeParam = new URLSearchParams(location.search).get('mode');
 if (_modeParam === 'program' || _modeParam === 'manual') {
     setTimeout(() => setMode(_modeParam === 'program' ? MODE.PROGRAM : MODE.MANUAL), 200);
 }
-// 攔截 Blockly.Extensions.register — 第二次註冊同名 extension 時跳過而非炸掉
+// v1.4 B-101-001 fix: 攔截 Blockly.Extensions.register
+// 1. Set 標記已見過的 extension 名稱（即使 Blockly 內部 throw 也不重複警告）
+// 2. try/catch 包 orig()，把 throw 降級為 warn
+// 3. 與 index.html 的早期防護互補（HTML 已在 Blockly 載入前裝好第一道）
+const _seenBlocklyExts = new Set();
 (function safeBlocklyExt() {
     if (typeof Blockly === 'undefined' || !Blockly.Extensions || !Blockly.Extensions.register) return;
+    if (Blockly.Extensions._b101001Patched) return;  // index.html 早期防護已裝過
     const orig = Blockly.Extensions.register.bind(Blockly.Extensions);
     Blockly.Extensions.register = function(name, fn) {
-        if (Blockly.Extensions._registry && Blockly.Extensions._registry.has(name)) {
-            console.warn('[v' + APP_VERSION + '] Blockly extension ' + name + ' already registered — 略過');
+        if (_seenBlocklyExts.has(name)) {
+            console.warn('[v' + APP_VERSION + ' B-101-001] Blockly extension "' + name + '" already registered — skip');
             return;
         }
+        _seenBlocklyExts.add(name);
         try {
             orig(name, fn);
         } catch (e) {
-            console.warn('[v' + APP_VERSION + '] Blockly extension ' + name + ' register failed: ' + e.message);
+            console.warn('[v' + APP_VERSION + ' B-101-001] Blockly extension "' + name + '" register failed: ' + (e.message || e) + ' — already registered, ignored');
         }
     };
+    Blockly.Extensions._b101001Patched = true;
 })();
 const gamepadConfig = {
     deadzone: parseFloat(new URLSearchParams(location.search).get('dz')) || 0.10,
@@ -1797,14 +1928,34 @@ function injectBlockly() {
 </xml>`;
 
     const blocklyDiv = document.getElementById('blockly-div');
-    const workspace = Blockly.inject(blocklyDiv, {
-        toolbox: toolbox,
-        grid: { spacing: 20, length: 3, colour: '#ddd', snap: true },
-        zoom: { controls: true, wheel: true, startScale: 0.85, maxScale: 2, minScale: 0.5 },
-        trashcan: true,
-        renderer: 'zelos',
-        theme: Blockly.Themes.Modern,
-    });
+    // v1.4 B-101-001 fix: 包 try/catch，捕捉 Blockly.inject 內部 throw
+    let workspace;
+    try {
+        workspace = Blockly.inject(blocklyDiv, {
+            toolbox: toolbox,
+            grid: { spacing: 20, length: 3, colour: '#ddd', snap: true },
+            zoom: { controls: true, wheel: true, startScale: 0.85, maxScale: 2, minScale: 0.5 },
+            trashcan: true,
+            renderer: 'zelos',
+            theme: Blockly.Themes.Modern,
+        });
+    } catch (e) {
+        console.warn('[v' + APP_VERSION + ' B-101-001] Blockly.inject failed: ' + (e.message || e) + ' — retrying');
+        // 第二次嘗試：通常第二次會成功（第二次註冊會被 safe wrapper 跳過）
+        try {
+            workspace = Blockly.inject(blocklyDiv, {
+                toolbox: toolbox,
+                grid: { spacing: 20, length: 3, colour: '#ddd', snap: true },
+                zoom: { controls: true, wheel: true, startScale: 0.85, maxScale: 2, minScale: 0.5 },
+                trashcan: true,
+                renderer: 'zelos',
+                theme: Blockly.Themes.Modern,
+            });
+        } catch (e2) {
+            console.error('[v' + APP_VERSION + ' B-101-001] Blockly.inject retry also failed: ' + (e2.message || e2));
+            throw e2;  // 真的沒救，let 主程式炸掉提示
+        }
+    }
 
     // v1.4 T-102: 預載範例 = 9 個積木展示（起飛 8m → 前進 2m → 順時針 90° → 降落）
     const starterXml = `
@@ -2341,6 +2492,8 @@ function animate() {
 
     // 不論手動 / 程式模式，每幀都檢查穿圈
     checkRingCollisions();
+    // v1.4 6/22 修正 3：1-1/1-2/1-3 過關條件檢查
+    checkPassZones();
     updateLevelTimer();
 
     // 套用到模型
