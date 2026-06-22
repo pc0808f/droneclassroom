@@ -54,8 +54,9 @@ class DroneController {
     }
     try {
       this._status('搜尋裝置中…（在視窗中選擇與手把螢幕相同的那台 pyCtrl-XX）');
+      // 用「服務 UUID」過濾：iOS/Bluefy 上比 namePrefix 可靠得多（namePrefix 在 iOS 常掃不到，清單會空白）
       this.device = await navigator.bluetooth.requestDevice({
-        filters: [{ namePrefix: 'pyCtrl' }],
+        filters: [{ services: [NUS_SERVICE] }],
         optionalServices: [NUS_SERVICE],
       });
       this.device.addEventListener('gattserverdisconnected', () => {
