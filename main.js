@@ -297,6 +297,17 @@ const arena = {
     playgroundOn: false,      // 視覺：playground 模型是否顯示中
     field: 'grid',            // 場地(由伺服器決定、全場一致):grid | playground — 碰撞依此
 };
+// ⚽ 無人機足球單人練習狀態（必須在 animate() 啟動前宣告 → 避免 TDZ）
+const SOCCER = {
+    active: false,
+    status: 'idle',           // idle | countdown | running | done
+    drill: null,              // 當前練習 config
+    objs: [],                 // 場地 / 球門 / 假人 3D 物件
+    goalNear: null, goalFar: null,
+    prevZ: 0, count: 0, startTime: 0, shuttleReturned: true,
+};
+// 場地尺寸(sim 單位,維持 2:1:1,放大到適合本模擬器的大無人機)
+const SOC = { halfX: 7, halfZ: 14, top: 12, goalZ: 13, goalY: 5, goalR: 2 };
 const GHOST_SPEED = 1.5;     // 鬼飛比較快
 const GHOST_CATCH_R = 2.2;   // 鬼的抓捕範圍（與 server ARENA_CATCH_DIST 一致）
 let myCatchAura = null;      // 自己是鬼時的抓捕光環
@@ -413,6 +424,7 @@ function clearLevelObjects() {
 
 function loadLevel(levelId) {
     if (!chapterData) return;
+    if (SOCCER.active) exitSoccer();   // 老師強制載入關卡時也離開足球練習
     const level = chapterData.levels.find(l => l.id === levelId);
     if (!level) {
         console.warn('找不到關卡：', levelId);
@@ -1232,8 +1244,9 @@ let currentMode = MODE.MANUAL;
 let isProgramRunning = false;
 
 function isManualLocked() {
-    // 手動鎖定條件：程式執行中、程式模式、3-2-1 倒數中、或大亂鬥倒數中
-    if (typeof arena !== 'undefined' && arena.active && arena.status === 'countdown') return true;
+    // 手動鎖定條件：程式執行中、程式模式、3-2-1 倒數中、大亂鬥倒數中、足球倒數中
+    if (arena.active && arena.status === 'countdown') return true;
+    if (SOCCER.active && SOCCER.status === 'countdown') return true;
     return isProgramRunning || currentMode !== MODE.MANUAL || levelCountdownActive;
 }
 
@@ -2840,7 +2853,9 @@ function animate() {
     // 實心方塊碰撞：擋住 drone 不讓它穿過去（只對標了 solid 的障礙物）
     resolveObstacleCollisions();
 
-    if (arena.active) {
+    if (SOCCER.active) {
+        soccerTick();
+    } else if (arena.active) {
         // 大亂鬥模式：跑 arena 邏輯，跳過一般關卡判定
         arenaTick();
     } else {
@@ -2904,7 +2919,12 @@ function animate() {
     });
 
     // 鏡頭
-    if (cameraMode.fpv) {
+    if (SOCCER.active && !cameraMode.fpv) {
+        // 足球：窄邊定點視角（站在己方端線、高度 5、看向場內/遠端門）
+        if (!droneModel.visible) droneModel.visible = true;
+        camera.position.set(0, 5.5, SOC.halfZ + 4);
+        camera.lookAt(0, 3.5, -4);
+    } else if (cameraMode.fpv) {
         // 第一視角：相機在機身、看機頭方向（略微往下,像 FPV 眼鏡）
         const yawE = new THREE.Euler(0, droneState.rotation.y, 0);
         const fwd = new THREE.Vector3(0, 0, -1).applyEuler(yawE);
@@ -3268,8 +3288,10 @@ document.getElementById('level-intro-start').addEventListener('click', () => {
 // v1.3 關卡選擇器
 document.querySelectorAll('.level-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-        if (arena.active) exitArena();   // 從大亂鬥切回一般關卡
         const levelId = btn.getAttribute('data-level');
+        if (!levelId) return;            // 大亂鬥 / 足球鈕沒有 data-level，交給各自的 handler
+        if (arena.active) exitArena();   // 從大亂鬥切回一般關卡
+        if (SOCCER.active) exitSoccer(); // 從足球練習切回一般關卡
         document.querySelectorAll('.level-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         loadLevel(levelId);
@@ -3279,7 +3301,9 @@ document.querySelectorAll('.level-btn').forEach(btn => {
 // 大亂鬥入口
 {
     const ab = document.getElementById('arena-btn');
-    if (ab) ab.addEventListener('click', () => { arena.active ? exitArena() : enterArena(); });
+    if (ab) ab.addEventListener('click', () => { if (SOCCER.active) exitSoccer(); arena.active ? exitArena() : enterArena(); });
+    const sb = document.getElementById('soccer-btn');
+    if (sb) sb.addEventListener('click', () => { SOCCER.active ? exitSoccer() : enterSoccer(); });
 }
 
 // v1.3 計時器更新（每幀）
@@ -3885,6 +3909,178 @@ function exitArena() {
     const td = document.getElementById('timer-display'); if (td) td.style.display = '';
 }
 
+// =============================================================================
+// 16. ⚽ 無人機足球 — 單人練習（7 關全開、過中線退半場、窄邊定點視角）
+// =============================================================================
+const SOCCER_DRILLS = [
+    { id: 'P-1', name: '熟悉場地', type: 'free', desc: '自由飛,熟悉場地與兩端球門。' },
+    { id: 'P-2', name: '單次穿門', type: 'pass', target: 1, desc: '飛到對面,穿過遠端球門 1 次。' },
+    { id: 'P-3', name: '連續穿門×3', type: 'pass', target: 3, timeLimit: 60, desc: '60 秒內穿過遠端門 3 次。' },
+    { id: 'P-4', name: '計時單穿', type: 'pass', target: 1, record: true, desc: '計時:穿過遠端門,挑戰最快!' },
+    { id: 'P-5', name: '繞過防守', type: 'pass', target: 1, dummies: true, desc: '遠端門前有假人,繞過去穿門。' },
+    { id: 'P-6', name: '兩端來回×3', type: 'shuttle', target: 3, desc: '穿遠端門→退回過中線→再穿,來回 3 次。' },
+    { id: 'P-7', name: '限時多穿', type: 'pass', target: 999, timeLimit: 180, record: true, desc: '3 分鐘內盡量多穿門!' },
+];
+function makeGoalRing(z, color) {
+    const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(SOC.goalR, 0.18, 16, 40),
+        new THREE.MeshPhongMaterial({ color, emissive: color, emissiveIntensity: 0.4, shininess: 80 }));
+    ring.position.set(0, SOC.goalY, z);   // torus 孔朝 z → 沿長軸穿過
+    return ring;
+}
+function clearSoccerField() {
+    SOCCER.objs.forEach(o => scene.remove(o));
+    SOCCER.objs = [];
+    obstacles = obstacles.filter(o => !(o.userData && o.userData.soccer));
+    SOCCER.goalNear = SOCCER.goalFar = null;
+}
+function buildSoccerField() {
+    clearSoccerField();
+    const objs = SOCCER.objs;
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(SOC.halfX * 2, SOC.halfZ * 2), new THREE.MeshPhongMaterial({ color: 0x3a7d44 }));
+    floor.rotation.x = -Math.PI / 2; floor.position.y = 0.02; objs.push(floor);
+    const wallMat = new THREE.MeshPhongMaterial({ color: 0x4dd0e1, transparent: true, opacity: 0.12, side: THREE.DoubleSide });
+    [[SOC.halfX * 2, SOC.top, 0.2, 0, SOC.top / 2, -SOC.halfZ], [SOC.halfX * 2, SOC.top, 0.2, 0, SOC.top / 2, SOC.halfZ],
+     [0.2, SOC.top, SOC.halfZ * 2, -SOC.halfX, SOC.top / 2, 0], [0.2, SOC.top, SOC.halfZ * 2, SOC.halfX, SOC.top / 2, 0]]
+        .forEach(([w, h, dd, x, y, z]) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, dd), wallMat); m.position.set(x, y, z); objs.push(m); });
+    const mid = new THREE.Mesh(new THREE.PlaneGeometry(SOC.halfX * 2, 0.3), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, side: THREE.DoubleSide }));
+    mid.rotation.x = -Math.PI / 2; mid.position.set(0, 0.05, 0); objs.push(mid);
+    SOCCER.goalFar = makeGoalRing(-SOC.goalZ, 0xff4444); objs.push(SOCCER.goalFar);   // 遠端紅=攻
+    SOCCER.goalNear = makeGoalRing(SOC.goalZ, 0x3b82f6); objs.push(SOCCER.goalNear);  // 近端藍=守
+    objs.forEach(o => scene.add(o));
+}
+function soccerSpawnDummies(on) {
+    if (!on) return;
+    [[-1.5, SOC.goalY, -SOC.goalZ + 3], [1.5, SOC.goalY, -SOC.goalZ + 3]].forEach(([x, y, z]) => {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshPhongMaterial({ color: 0x9b5de5, opacity: 0.9, transparent: true, emissive: 0x9b5de5, emissiveIntensity: 0.2 }));
+        m.position.set(x, y, z); m.userData.solid = true; m.userData.half = 1; m.userData.soccer = true;
+        scene.add(m); obstacles.push(m); SOCCER.objs.push(m);
+    });
+}
+function clampSoccerBounds() {
+    const p = droneState.position, v = droneState.velocity, m = 0.5;
+    if (p.x > SOC.halfX - m) { p.x = SOC.halfX - m; if (v.x > 0) v.x = 0; } else if (p.x < -SOC.halfX + m) { p.x = -SOC.halfX + m; if (v.x < 0) v.x = 0; }
+    if (p.z > SOC.halfZ - m) { p.z = SOC.halfZ - m; if (v.z > 0) v.z = 0; } else if (p.z < -SOC.halfZ + m) { p.z = -SOC.halfZ + m; if (v.z < 0) v.z = 0; }
+    if (p.y > SOC.top - m) { p.y = SOC.top - m; if (v.y > 0) v.y = 0; }
+}
+function soccerResetDronePos() {
+    droneState.position.set(0, SOC.goalY, SOC.halfZ - 3);
+    droneState.velocity.set(0, 0, 0); droneState.rotation.y = 0;
+    droneState.isFlying = true; droneState.isGrounded = false;
+    SOCCER.prevZ = droneState.position.z;
+}
+const soccerBest = (id) => { try { return +(localStorage.getItem('creafly_soccer_' + id) || 0); } catch (e) { return 0; } };
+const soccerSaveBest = (id, v) => { try { localStorage.setItem('creafly_soccer_' + id, String(v)); } catch (e) {} };
+function enterSoccer() {
+    if (SOCCER.active) return;
+    if (arena.active) exitArena();
+    SOCCER.active = true; SOCCER.status = 'idle'; SOCCER.drill = null;
+    if (currentMode !== MODE.MANUAL) setMode(MODE.MANUAL);
+    clearLevelObjects(); currentLevel = null; levelArmed = true; levelCountdownActive = false;
+    const introEl = document.getElementById('level-intro'); if (introEl) introEl.classList.remove('show');
+    ['mission-hud', 'progress-bar', 'balloon-hud', 'arena-hud'].forEach(id => { const e = document.getElementById(id); if (e) e.style.display = 'none'; });
+    groundGrid.visible = false; ground.visible = false;
+    const td = document.getElementById('timer-display'); if (td) td.style.display = 'none';
+    const lt = document.getElementById('level-timer'); if (lt) lt.textContent = '⚽ 足球練習';
+    document.querySelectorAll('.level-btn').forEach(b => b.classList.remove('active'));
+    const sbtn = document.getElementById('soccer-btn'); if (sbtn) sbtn.classList.add('active');
+    buildSoccerField(); soccerResetDronePos();
+    showSoccerHud(true); renderDrillButtons(); updateSoccerHud();
+    setStateHUD('⚽ 選一個練習開始 👇'); showToast('⚽ 進入足球單人練習', 'success');
+}
+function exitSoccer() {
+    if (!SOCCER.active) return;
+    SOCCER.active = false; SOCCER.status = 'idle'; SOCCER.drill = null;
+    clearSoccerField();
+    groundGrid.visible = true; ground.visible = true;
+    const td = document.getElementById('timer-display'); if (td) td.style.display = '';
+    showSoccerHud(false);
+    const sbtn = document.getElementById('soccer-btn'); if (sbtn) sbtn.classList.remove('active');
+}
+function startDrill(idx) {
+    const d = SOCCER_DRILLS[idx]; if (!d || !SOCCER.active) return;
+    SOCCER.drill = d; SOCCER.count = 0; SOCCER.shuttleReturned = true;
+    obstacles = obstacles.filter(o => !(o.userData && o.userData.soccerDummy && (scene.remove(o), true)));
+    if (d.dummies) { obstacles.filter(o => o.userData && o.userData.soccerDummy).forEach(o => scene.remove(o)); soccerSpawnDummiesTagged(); }
+    soccerResetDronePos();
+    if (d.type === 'free') { SOCCER.status = 'running'; SOCCER.startTime = Date.now(); setStateHUD('⚽ ' + d.name); showToast(d.desc, ''); updateSoccerHud(); return; }
+    SOCCER.status = 'countdown';
+    showToast(d.desc, '');
+    let n = 3;
+    const tick = () => {
+        if (!SOCCER.active || SOCCER.drill !== d) return;
+        if (n > 0) { showCountdownNumber(n); n--; setTimeout(tick, 700); }
+        else { showCountdownNumber('GO'); SOCCER.status = 'running'; SOCCER.startTime = Date.now(); SOCCER.prevZ = droneState.position.z; setStateHUD('⚽ ' + d.name + '：開始!'); }
+    };
+    tick();
+    updateSoccerHud();
+}
+function soccerSpawnDummiesTagged() {
+    [[-1.5, SOC.goalY, -SOC.goalZ + 3], [1.5, SOC.goalY, -SOC.goalZ + 3]].forEach(([x, y, z]) => {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshPhongMaterial({ color: 0x9b5de5, opacity: 0.9, transparent: true, emissive: 0x9b5de5, emissiveIntensity: 0.2 }));
+        m.position.set(x, y, z); m.userData.solid = true; m.userData.half = 1; m.userData.soccer = true; m.userData.soccerDummy = true;
+        scene.add(m); obstacles.push(m); SOCCER.objs.push(m);
+    });
+}
+function soccerTick() {
+    clampSoccerBounds();
+    const d = SOCCER.drill;
+    if (SOCCER.status !== 'running' || !d) { updateSoccerHud(); return; }
+    const z = droneState.position.z;
+    const crossedFar = SOCCER.prevZ > -SOC.goalZ && z <= -SOC.goalZ
+        && Math.abs(droneState.position.x) < SOC.goalR && Math.abs(droneState.position.y - SOC.goalY) < SOC.goalR;
+    if (d.type === 'pass' && crossedFar) {
+        SOCCER.count++; playRingSound();
+        showToast(`⚽ 穿門 ${SOCCER.count}${d.target < 99 ? '/' + d.target : ''}`, 'success');
+        if (SOCCER.count >= d.target) soccerDrillDone(false);
+    } else if (d.type === 'shuttle') {
+        if (SOCCER.shuttleReturned && crossedFar) {
+            SOCCER.count++; SOCCER.shuttleReturned = false; playRingSound();
+            if (SOCCER.count >= d.target) soccerDrillDone(false);
+            else { showToast(`⚽ 第 ${SOCCER.count}/${d.target} 趟!退回過中線`, 'success'); setStateHUD('↩ 退回過中線(z>0)'); }
+        } else if (!SOCCER.shuttleReturned && z > 0) { SOCCER.shuttleReturned = true; setStateHUD('↗ 再去穿遠端門!'); }
+    }
+    if (SOCCER.status === 'running' && d.timeLimit && (Date.now() - SOCCER.startTime) / 1000 >= d.timeLimit) soccerDrillDone(true);
+    SOCCER.prevZ = z;
+    updateSoccerHud();
+}
+function soccerDrillDone(timeUp) {
+    const d = SOCCER.drill; if (!d || SOCCER.status === 'done') return;
+    SOCCER.status = 'done';
+    const secs = (Date.now() - SOCCER.startTime) / 1000;
+    let msg;
+    if (d.record && d.target >= 99) { const best = soccerBest(d.id); if (SOCCER.count > best) soccerSaveBest(d.id, SOCCER.count); msg = `⏱ 時間到!穿門 ${SOCCER.count} 次(最佳 ${Math.max(best, SOCCER.count)})`; }
+    else if (d.record) { const best = soccerBest(d.id); const newBest = (!best || secs < best); if (newBest) soccerSaveBest(d.id, +secs.toFixed(1)); msg = `🏆 完成!${secs.toFixed(1)}s${newBest ? '（新紀錄!）' : '（最佳 ' + best.toFixed(1) + 's）'}`; }
+    else if (timeUp) { msg = `⏱ 時間到!完成 ${SOCCER.count}/${d.target}`; }
+    else { msg = `🎉 ${d.name} 完成!用時 ${secs.toFixed(1)}s`; }
+    setStateHUD(msg); showToast(msg, 'success'); if (typeof playCompleteSound === 'function') playCompleteSound();
+    renderDrillButtons(); updateSoccerHud();
+}
+function showSoccerHud(on) { const el = document.getElementById('soccer-hud'); if (el) el.style.display = on ? 'block' : 'none'; }
+function renderDrillButtons() {
+    const el = document.getElementById('soccer-drills'); if (!el) return;
+    el.innerHTML = SOCCER_DRILLS.map((d, i) => {
+        const best = soccerBest(d.id);
+        const bt = d.record && best ? (d.target >= 99 ? ` ⭐${best}` : ` ⭐${(+best).toFixed(1)}s`) : '';
+        return `<button class="soccer-drill-btn" data-i="${i}">${d.id} ${d.name}${bt}</button>`;
+    }).join('');
+    el.querySelectorAll('.soccer-drill-btn').forEach(b => b.addEventListener('click', () => startDrill(+b.getAttribute('data-i'))));
+}
+function updateSoccerHud() {
+    const el = document.getElementById('soccer-status'); if (!el) return;
+    const d = SOCCER.drill;
+    if (!d) { el.textContent = '選一個練習開始 👇'; return; }
+    let s = `${d.id} ${d.name}`;
+    if (SOCCER.status === 'running') {
+        const t = ((Date.now() - SOCCER.startTime) / 1000).toFixed(1);
+        if (d.type === 'free') s += ` ｜ ⏱ ${t}s`;
+        else if (d.timeLimit) s += ` ｜ 穿門 ${SOCCER.count}${d.target < 99 ? '/' + d.target : ''} ｜ ⏱ ${Math.max(0, Math.ceil(d.timeLimit - (Date.now() - SOCCER.startTime) / 1000))}s`;
+        else s += ` ｜ 穿門 ${SOCCER.count}/${d.target} ｜ ⏱ ${t}s`;
+    } else if (SOCCER.status === 'countdown') s += ' ｜ 準備…';
+    else if (SOCCER.status === 'done') s += ' ｜ ✓ 完成';
+    el.textContent = s;
+}
+
 // 玩家設好名字後，自動連線 + 註冊
 window.addEventListener('player-ready', connectToTeacher);
 
@@ -4024,6 +4220,7 @@ window._creafly = {
     droneState, missionRings, workspace, programState,
     loadLevel, scene, arena, enterArena, exitArena,
     camera, cameraMode, droneModel,
+    SOCCER, enterSoccer, exitSoccer, startDrill,
     get currentLevel() { return currentLevel; },
     get playgroundBVHReady() { return !!_playgroundBVH; },
     get playgroundGeo() { return _playgroundGeo; },

@@ -1086,6 +1086,21 @@
         #arena-scoreboard .arena-row b { color: var(--creafly-green, #4ade80); }
         #arena-scoreboard .arena-row.me { background: rgba(255,206,0,0.22); font-weight: 700; }
 
+        /* ⚽ 足球練習 HUD（右上，與 arena-hud 同位） */
+        #soccer-hud {
+            position: fixed; top: 64px; right: 12px; z-index: 240; display: none;
+            background: rgba(10, 37, 64, 0.88); border: 1px solid rgba(255,255,255,0.18);
+            border-radius: 10px; padding: 10px 12px; width: 220px; color: #fff; backdrop-filter: blur(4px);
+        }
+        #soccer-hud .arena-title { font-size: 14px; font-weight: 700; color: var(--creafly-yellow, #FFCE00); margin-bottom: 6px; }
+        #soccer-drills { display: flex; flex-direction: column; gap: 4px; }
+        .soccer-drill-btn {
+            text-align: left; padding: 6px 8px; border-radius: 6px; cursor: pointer;
+            border: 1px solid rgba(255,255,255,0.18); background: rgba(255,255,255,0.08);
+            color: #fff; font-size: 13px;
+        }
+        .soccer-drill-btn:hover { background: rgba(34,197,94,0.35); }
+
         /* 直向提示：iOS Safari 無法用程式鎖定方向，改全螢幕請使用者橫放 */
         #rotate-prompt {
             display: none;
@@ -1778,8 +1793,16 @@
         <button class="level-btn" data-level="1-5">1-5 綜合</button>
         <button class="level-btn" data-level="1-6">🎈 1-6 氣球</button>
         <button class="level-btn" id="arena-btn" style="background:linear-gradient(135deg,#ff6b6b,#f59e0b);color:#fff;">🏟️ 大亂鬥</button>
+        <button class="level-btn" id="soccer-btn" style="background:linear-gradient(135deg,#22c55e,#0ea5e9);color:#fff;">⚽ 足球練習</button>
     </div>
     <div class="level-selector-timer" id="level-timer">⏱ 0.0s</div>
+</div>
+
+<!-- ⚽ 足球單人練習 HUD：練習選單 + 進度 -->
+<div id="soccer-hud" style="display:none;">
+    <div class="arena-title">⚽ 足球單人練習</div>
+    <div id="soccer-status" style="font-size:13px;margin:4px 0 8px;opacity:.9;">選一個練習開始 👇</div>
+    <div id="soccer-drills"></div>
 </div>
 
 <!-- 大亂鬥 HUD：計時 + 即時排行 -->
