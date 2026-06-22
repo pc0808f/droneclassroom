@@ -3450,6 +3450,19 @@ function makeCatchAura() {
     scene.add(m);
     return m;
 }
+// 依「最近逃跑者距離」調整光環：越近 → 越鮮紅、脈動越強（快抓到的警示）
+function applyAuraDanger(aura, gpos, runners) {
+    let minD = Infinity;
+    for (const rp of runners) { const d = gpos.distanceTo(rp); if (d < minD) minD = d; }
+    const mat = aura.material;
+    // t：>2R 為 0（安全）、=R 為 1（即將抓到）
+    const t = Math.max(0, Math.min(1, (GHOST_CATCH_R * 2 - minD) / GHOST_CATCH_R));
+    if (t <= 0) { mat.opacity = 0.14; mat.color.setHex(0xff2d55); aura.scale.setScalar(1); return; }
+    const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.013);  // 0..1 來回
+    mat.opacity = 0.18 + 0.34 * t * (0.45 + 0.55 * pulse);          // 越近越亮 + 脈動
+    mat.color.setRGB(1, 0.18 * (1 - t), 0.33 * (1 - t));            // 越近越鮮紅（t=1→純紅）
+    aura.scale.setScalar(1 + 0.10 * t * pulse);                     // 輕微脹縮
+}
 function makeArenaBalloon(b) {
     const color = BALLOON_COLORS[b.id % BALLOON_COLORS.length];
     const m = new THREE.Mesh(new THREE.SphereGeometry(0.7, 16, 12),
@@ -3612,7 +3625,8 @@ function sendArenaPos() {
 }
 function arenaTick() {
     const tagRunning = arena.mode === 'tag' && arena.status === 'running';
-    // 其他玩家位置內插（讓移動平順）
+    // 第一輪：內插其他玩家位置，並收集「存活逃跑者」的位置（給光環危險度用）
+    const runnerPos = [];
     arena.others.forEach(o => {
         if (o.target.x !== undefined) {
             o.group.position.x += (o.target.x - o.group.position.x) * 0.25;
@@ -3620,14 +3634,18 @@ function arenaTick() {
             o.group.position.z += (o.target.z - o.group.position.z) * 0.25;
             o.group.rotation.y = o.target.yaw || 0;
         }
-        // 鬼的抓捕光環（跟著鬼，不受機體放大影響 → 獨立放在場景）
+        if (o.role === 'runner' && !o.eaten) runnerPos.push(o.group.position);
+    });
+    if (arena.myRole === 'runner' && !arena.eaten) runnerPos.push(droneState.position);
+    // 第二輪：鬼的抓捕光環（跟著鬼；接近逃跑者時脈動 + 變鮮紅）
+    arena.others.forEach(o => {
         const showAura = tagRunning && o.role === 'ghost' && !o.eaten;
-        if (showAura) { if (!o.aura) o.aura = makeCatchAura(); o.aura.visible = true; o.aura.position.copy(o.group.position); }
+        if (showAura) { if (!o.aura) o.aura = makeCatchAura(); o.aura.visible = true; o.aura.position.copy(o.group.position); applyAuraDanger(o.aura, o.group.position, runnerPos); }
         else if (o.aura) o.aura.visible = false;
     });
     // 自己是鬼 → 顯示自己的抓捕光環
     const meGhost = tagRunning && arena.myRole === 'ghost' && !arena.eaten;
-    if (meGhost) { if (!myCatchAura) myCatchAura = makeCatchAura(); myCatchAura.visible = true; myCatchAura.position.copy(droneState.position); }
+    if (meGhost) { if (!myCatchAura) myCatchAura = makeCatchAura(); myCatchAura.visible = true; myCatchAura.position.copy(droneState.position); applyAuraDanger(myCatchAura, droneState.position, runnerPos); }
     else if (myCatchAura) myCatchAura.visible = false;
     // 搶氣球（撞到 → 回報 server 仲裁）
     if (arena.status === 'running') {
