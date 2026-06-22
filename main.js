@@ -47,6 +47,8 @@ const renderer = new THREE.WebGLRenderer({
 });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setClearColor(0x87CEEB);
+renderer.shadowMap.enabled = true;                  // 開啟陰影(原本沒開,castShadow 旗標都沒作用)
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;   // 柔邊陰影
 
 // =============================================================================
 // 2. 燈光
@@ -4043,6 +4045,7 @@ function makeGoalRing(z, color) {
         new THREE.TorusGeometry(SOC.goalR, SOC.goalTube, 16, 48),
         new THREE.MeshPhongMaterial({ color, emissive: color, emissiveIntensity: 0.4, shininess: 80 }));
     ring.position.set(0, SOC.goalY, z);   // torus 孔朝 z → 沿長軸穿過
+    ring.castShadow = true;               // 在地面投影 → 看得出深度
     return ring;
 }
 function clearSoccerField() {
@@ -4056,7 +4059,7 @@ function buildSoccerField() {
     clearSoccerField();
     const objs = SOCCER.objs;
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(SOC.halfX * 2, SOC.halfZ * 2), new THREE.MeshPhongMaterial({ color: 0x3a7d44 }));
-    floor.rotation.x = -Math.PI / 2; floor.position.y = 0.02; objs.push(floor);
+    floor.rotation.x = -Math.PI / 2; floor.position.y = 0.02; floor.receiveShadow = true; objs.push(floor);
     const wallMat = new THREE.MeshPhongMaterial({ color: 0x4dd0e1, transparent: true, opacity: 0.12, side: THREE.DoubleSide });
     [[SOC.halfX * 2, SOC.top, 0.2, 0, SOC.top / 2, -SOC.halfZ], [SOC.halfX * 2, SOC.top, 0.2, 0, SOC.top / 2, SOC.halfZ],
      [0.2, SOC.top, SOC.halfZ * 2, -SOC.halfX, SOC.top / 2, 0], [0.2, SOC.top, SOC.halfZ * 2, SOC.halfX, SOC.top / 2, 0]]
@@ -4139,6 +4142,7 @@ function soccerSpawnDummiesTagged() {
     [[-1.5, SOC.goalY, -SOC.goalZ + 3], [1.5, SOC.goalY, -SOC.goalZ + 3]].forEach(([x, y, z]) => {
         const m = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshPhongMaterial({ color: 0x9b5de5, opacity: 0.9, transparent: true, emissive: 0x9b5de5, emissiveIntensity: 0.2 }));
         m.position.set(x, y, z); m.userData.solid = true; m.userData.half = 1; m.userData.soccer = true; m.userData.soccerDummy = true;
+        m.castShadow = true;
         scene.add(m); obstacles.push(m); SOCCER.objs.push(m);
     });
 }
