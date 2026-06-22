@@ -6,68 +6,12 @@
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='52' font-size='52'%3E%F0%9F%9A%9F%3C/text%3E%3C/svg%3E">
     <title>CREAFLY Drone Simulator — 教育用無人機程式化飛行</title>
 
-    <!-- v1.4 B-101-001 fix: 早期 Blockly 防護，必須在 Blockly scripts 載入前執行 -->
-    <script>
-    (function b101001EarlyGuard() {
-        // 1. 用 Set 記住已註冊的 extension 名稱
-        const _seen = new Set();
-        // 2. 全域 error handler：捕捉並降級「already registered」錯誤
-        window.addEventListener('error', function(e) {
-            const msg = (e.error && e.error.message) || e.message || '';
-            if (msg.indexOf('already registered') !== -1) {
-                console.warn('[B-101-001 fix] Suppressed Blockly extension double-registration:', msg);
-                e.preventDefault();
-                e.stopImmediatePropagation();
-                return true;
-            }
-        }, true);
-        // 3. 安裝 Blockly.Extensions.register 攔截器
-        function installWrapper() {
-            if (typeof Blockly === 'undefined' || !Blockly.Extensions || !Blockly.Extensions.register) return false;
-            if (Blockly.Extensions._b101001Patched) return true;  // 已裝過
-            const orig = Blockly.Extensions.register.bind(Blockly.Extensions);
-            Blockly.Extensions.register = function(name, fn) {
-                if (_seen.has(name)) {
-                    console.warn('[B-101-001 fix] Blockly extension "' + name + '" already registered — skip');
-                    return;
-                }
-                _seen.add(name);
-                try {
-                    orig(name, fn);
-                } catch (e) {
-                    console.warn('[B-101-001 fix] Blockly extension "' + name + '" register failed: ' + (e.message || e));
-                }
-            };
-            Blockly.Extensions._b101001Patched = true;
-            return true;
-        }
-        // 立即裝（若 Blockly 已存在）；否則用 Object.defineProperty 攔截 Blockly 賦值
-        if (installWrapper()) return;
-        let _blocklyRef;
-        try {
-            Object.defineProperty(window, 'Blockly', {
-                configurable: true,
-                get() { return _blocklyRef; },
-                set(v) {
-                    _blocklyRef = v;
-                    // Blockly 物件剛被賦值，DOMContentLoaded 前通常已完成
-                    setTimeout(installWrapper, 0);
-                }
-            });
-        } catch (e) {
-            // defineProperty 失敗（很舊的瀏覽器），fallback：等 DOMContentLoaded
-            window.addEventListener('DOMContentLoaded', function() {
-                installWrapper();
-            }, { once: true });
-        }
-    })();
-    </script>
-
-    <!-- Blockly core (v=1.2 強制重抓 CDN，避免舊版 extension 重複註冊) -->
-    <script src="https://unpkg.com/blockly@10.4.3/blockly.min.js?v=1.2"></script>
-    <script src="https://unpkg.com/blockly@10.4.3/blocks_compressed.js?v=1.2"></script>
-    <script src="https://unpkg.com/blockly@10.4.3/javascript_compressed.js?v=1.2"></script>
-    <script src="https://unpkg.com/blockly@10.4.3/msg/zh-hant.js?v=1.2"></script>
+    <!-- Blockly：用模組化載入（core + blocks + JS 產生器各一次），不要用 blockly.min.js 全包版，
+         否則積木/產生器會被註冊兩次 → "Extension already registered"。v 提升強制重抓 CDN。 -->
+    <script src="https://unpkg.com/blockly@10.4.3/blockly_compressed.js?v=1.5"></script>
+    <script src="https://unpkg.com/blockly@10.4.3/blocks_compressed.js?v=1.5"></script>
+    <script src="https://unpkg.com/blockly@10.4.3/javascript_compressed.js?v=1.5"></script>
+    <script src="https://unpkg.com/blockly@10.4.3/msg/zh-hant.js?v=1.5"></script>
 
     <!-- Virtual joystick (nipplejs) for iPad/touch devices -->
     <script src="https://cdn.jsdelivr.net/npm/nipplejs@0.10.2/dist/nipplejs.min.js"></script>
