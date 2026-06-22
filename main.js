@@ -56,7 +56,7 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;   // 柔邊陰影
 scene.add(new THREE.AmbientLight(0xffffff, 0.55));
 
 const sunLight = new THREE.DirectionalLight(0xffffff, 1.0);
-sunLight.position.set(30, 50, 20);
+sunLight.position.set(2, 60, 1);   // 幾乎正上方 → 影子直接投在物體正下方(好判斷位置),非斜投影
 sunLight.castShadow = true;
 sunLight.shadow.mapSize.width = 1024;
 sunLight.shadow.mapSize.height = 1024;
