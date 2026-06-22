@@ -36,6 +36,8 @@ new RGBELoader().load(
 
 const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
 camera.position.set(0, 15, 30);
+// 視角模式：false = 第三人稱（跟隨）、true = 第一視角（FPV，相機在機身看機頭方向）
+const cameraMode = { fpv: false };
 
 const renderer = new THREE.WebGLRenderer({
     canvas: sceneCanvas,
@@ -2828,12 +2830,24 @@ function animate() {
         }
     });
 
-    // 鏡頭跟隨（簡單的第三人稱）
-    const camOffset = new THREE.Vector3(0, 4, 12);
-    camOffset.applyEuler(new THREE.Euler(0, droneState.rotation.y, 0));
-    const targetCamPos = droneState.position.clone().add(camOffset);
-    camera.position.lerp(targetCamPos, 0.06);
-    camera.lookAt(droneState.position);
+    // 鏡頭
+    if (cameraMode.fpv) {
+        // 第一視角：相機在機身、看機頭方向（略微往下,像 FPV 眼鏡）
+        const yawE = new THREE.Euler(0, droneState.rotation.y, 0);
+        const fwd = new THREE.Vector3(0, 0, -1).applyEuler(yawE);
+        const eye = droneState.position.clone().add(new THREE.Vector3(0, 0.45, 0)).add(fwd.clone().multiplyScalar(0.35));
+        camera.position.copy(eye);
+        camera.lookAt(eye.clone().add(fwd.multiplyScalar(10)).add(new THREE.Vector3(0, -1.2, 0)));
+        if (droneModel.visible) droneModel.visible = false;  // FPV 不顯示自己的機身擋鏡頭
+    } else {
+        // 第三人稱（跟隨）
+        if (!droneModel.visible) droneModel.visible = true;
+        const camOffset = new THREE.Vector3(0, 4, 12);
+        camOffset.applyEuler(new THREE.Euler(0, droneState.rotation.y, 0));
+        const targetCamPos = droneState.position.clone().add(camOffset);
+        camera.position.lerp(targetCamPos, 0.06);
+        camera.lookAt(droneState.position);
+    }
 
     updateStatus();
     renderer.render(scene, camera);
@@ -3242,6 +3256,20 @@ document.getElementById('music-btn').addEventListener('click', () => {
         showToast('🎵 背景音樂開啟', '');
     }
 });
+
+// 視角切換：第三人稱 ⇄ 第一視角(FPV)
+function toggleView() {
+    cameraMode.fpv = !cameraMode.fpv;
+    const btn = document.getElementById('view-btn');
+    if (btn) { btn.textContent = cameraMode.fpv ? '👁 視角：第一視角' : '👁 視角：第三人稱'; btn.classList.toggle('active', cameraMode.fpv); }
+    showToast(cameraMode.fpv ? '👁 第一視角(FPV)' : '🎥 第三人稱', '');
+}
+(function setupView() {
+    const btn = document.getElementById('view-btn');
+    if (btn) btn.addEventListener('click', toggleView);
+    // 鍵盤 C 快速切換
+    window.addEventListener('keydown', (e) => { if (!e.repeat && e.key && e.key.toLowerCase() === 'c') toggleView(); });
+})();
 
 // 全螢幕（iPad Safari 支援元素全螢幕的 webkit 版本；桌機原生支援）
 (function setupFullscreen() {
@@ -3911,6 +3939,7 @@ if (new URLSearchParams(location.search).has('autorun')) {
 window._creafly = {
     droneState, missionRings, workspace, programState,
     loadLevel, scene, arena, enterArena, exitArena,
+    camera, cameraMode, droneModel,
     get currentLevel() { return currentLevel; },
     HOME_POSITION,
 };
