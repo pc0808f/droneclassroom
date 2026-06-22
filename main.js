@@ -377,15 +377,25 @@ function loadLevel(levelId) {
     levelStartTime = 0;
     levelArmed = false;
     levelCountdownActive = false;
-    const lt0 = document.getElementById('level-timer'); if (lt0) lt0.textContent = '⏱ 0.0s';
-    const td0 = document.getElementById('timer-display'); if (td0) td0.textContent = '0.0s';
+    // 自由活動關（freeplay）不計時：左下顯示「自由活動」、右上徽章隱藏
+    const lt0 = document.getElementById('level-timer');
+    const td0 = document.getElementById('timer-display');
+    if (level.freeplay) {
+        if (lt0) lt0.textContent = '🎈 自由活動';
+        if (td0) td0.style.display = 'none';
+    } else {
+        if (lt0) lt0.textContent = '⏱ 0.0s';
+        if (td0) { td0.style.display = ''; td0.textContent = '0.0s'; }
+    }
     programState.manualComplete = false;
 
     // v1.4 6/22 修正 3：建立 pass zone 視覺 discs + 初始化進度
     if (level.passZones && level.passZones.length) {
         passZoneProgress = new Array(level.passZones.length).fill(false);
         level.passZones.forEach((zone, i) => {
-            // 視覺：地面綠色半透明 disc
+            // 只有「位置」型目標（前/後/左/右）才畫地面圈才有意義；
+            // 高度 / 方位型目標畫在地上反而誤導，改靠右側進度條表示（push null 維持索引對齊）。
+            if (zone.type !== 'position') { passZoneMeshes.push(null); return; }
             const disc = new THREE.Mesh(
                 new THREE.RingGeometry(0.6, 1.2, 32),
                 new THREE.MeshBasicMaterial({
@@ -557,6 +567,8 @@ function armLevelStart() {
     levelArmed = true;
     const modal = document.getElementById('level-intro');
     if (modal) modal.classList.remove('show');
+    // 自由活動關：不倒數、不計時，直接開飛
+    if (currentLevel && currentLevel.freeplay) return;
     runCountdown(() => {
         levelStartTime = Date.now();   // 計時正式從 0 起算
     });
@@ -3116,7 +3128,7 @@ document.querySelectorAll('.level-btn').forEach(btn => {
 
 // v1.3 計時器更新（每幀）
 function updateLevelTimer() {
-    if (!currentLevel) return;
+    if (!currentLevel || currentLevel.freeplay) return;  // 自由活動關不計時
     // levelStartTime=0 表示尚未開始（倒數前）→ 顯示 0.0s
     const elapsed = levelStartTime ? (Date.now() - levelStartTime) / 1000 : 0;
     const t = elapsed.toFixed(1);
