@@ -281,14 +281,18 @@ let ringFaceHintAt = 0;  // 「機頭沒對準圈」提示的節流時間戳
 const arena = {
     active: false,
     status: 'idle',          // idle | countdown | running | ended
+    mode: 'balloon',         // balloon | tag（鬼抓人）
+    myRole: 'runner',        // runner | ghost
+    eaten: false,            // 鬼抓人：我是否已被吃掉
     endTime: 0,
     balloonMeshes: new Map(), // id -> mesh
     pendingPop: new Set(),    // 已送出 pop、等 server 確認的 balloon id
-    others: new Map(),        // playerId -> { group, target }
+    others: new Map(),        // playerId -> { group, target, role, eaten }
     obstacles: [],
     posTimer: null,
     playgroundOn: false,      // 大亂鬥背景：false = 格線競技場、true = playground 場景
 };
+const GHOST_SPEED = 1.5;     // 鬼飛比較快
 let _playgroundObj = null, _playgroundLoading = false;
 const BALLOON_COLORS = [0xff4d6d, 0xffd166, 0x4dd0e1, 0x9b5de5, 0x4ade80, 0xff9f1c];
 
@@ -1498,6 +1502,10 @@ function applyManualControls() {
     // 優先級：實體搖桿 > 鍵盤 > 虛擬搖桿（三者可疊加，但搖桿最權威）
     applyGamepadControls();
 
+    // 鬼抓人：鬼飛比較快
+    const spd = (arena.active && arena.mode === 'tag' && arena.myRole === 'ghost' && !arena.eaten) ? GHOST_SPEED : 1;
+    const TH = THRUST * spd, LIFT = MANUAL_LIFT * spd;
+
     // 起飛：按 Space 或左桿往上推
     const wantsTakeoff = keys[' '] || joystick.throttle < -0.3;
     if (wantsTakeoff && droneState.isGrounded) {
@@ -1506,37 +1514,37 @@ function applyManualControls() {
     }
 
     // 上升下降（鍵盤 + 搖桿可同時）
-    if (keys[' ']) droneState.velocity.y += MANUAL_LIFT;
-    if (keys['shift']) droneState.velocity.y -= MANUAL_LIFT;
-    if (joystick.throttle !== 0) droneState.velocity.y += -joystick.throttle * MANUAL_LIFT;
+    if (keys[' ']) droneState.velocity.y += LIFT;
+    if (keys['shift']) droneState.velocity.y -= LIFT;
+    if (joystick.throttle !== 0) droneState.velocity.y += -joystick.throttle * LIFT;
 
     // 水平移動（以機頭方向為準）
     if (droneState.isFlying) {
         // 前進 / 後退
         if (keys['w']) {
             const fwd = new THREE.Vector3(0, 0, -1).applyEuler(droneState.rotation);
-            droneState.velocity.add(fwd.multiplyScalar(THRUST));
+            droneState.velocity.add(fwd.multiplyScalar(TH));
         }
         if (keys['s']) {
             const fwd = new THREE.Vector3(0, 0, 1).applyEuler(droneState.rotation);
-            droneState.velocity.add(fwd.multiplyScalar(THRUST));
+            droneState.velocity.add(fwd.multiplyScalar(TH));
         }
         if (joystick.pitch !== 0) {
             const fwd = new THREE.Vector3(0, 0, joystick.pitch).normalize().applyEuler(droneState.rotation);
-            droneState.velocity.add(fwd.multiplyScalar(THRUST * Math.abs(joystick.pitch)));
+            droneState.velocity.add(fwd.multiplyScalar(TH * Math.abs(joystick.pitch)));
         }
         // 左飛 / 右飛
         if (keys['a']) {
             const lft = new THREE.Vector3(-1, 0, 0).applyEuler(droneState.rotation);
-            droneState.velocity.add(lft.multiplyScalar(THRUST));
+            droneState.velocity.add(lft.multiplyScalar(TH));
         }
         if (keys['d']) {
             const rgt = new THREE.Vector3(1, 0, 0).applyEuler(droneState.rotation);
-            droneState.velocity.add(rgt.multiplyScalar(THRUST));
+            droneState.velocity.add(rgt.multiplyScalar(TH));
         }
         if (joystick.roll !== 0) {
             const rgt = new THREE.Vector3(joystick.roll, 0, 0).normalize().applyEuler(droneState.rotation);
-            droneState.velocity.add(rgt.multiplyScalar(THRUST * Math.abs(joystick.roll)));
+            droneState.velocity.add(rgt.multiplyScalar(TH * Math.abs(joystick.roll)));
         }
         // 旋轉（鍵盤 + 搖桿 yaw）
         if (keys['arrowleft']) droneState.rotation.y += 0.03;
@@ -3395,16 +3403,27 @@ function makeNameLabel(text) {
 function makeGhostDrone(id, name, emoji) {
     const g = new THREE.Group();
     const col = arenaColorForId(id);
-    g.add(new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.25, 0.9), new THREE.MeshPhongMaterial({ color: col, emissive: col, emissiveIntensity: 0.25 })));
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.25, 0.9), new THREE.MeshPhongMaterial({ color: col, emissive: col, emissiveIntensity: 0.25, transparent: true, opacity: 1 }));
+    g.add(body);
     const nose = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.4, 12), new THREE.MeshBasicMaterial({ color: 0xffffff }));
     nose.rotation.x = Math.PI / 2; nose.position.z = -0.6; g.add(nose);
     [[0.5, 0.5], [-0.5, 0.5], [0.5, -0.5], [-0.5, -0.5]].forEach(p => {
         const m = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 8), new THREE.MeshBasicMaterial({ color: 0x222831 }));
         m.position.set(p[0], 0, p[1]); g.add(m);
     });
+    g.userData.body = body;
+    g.userData.baseColor = col;
     g.add(makeNameLabel((emoji || '') + (name || '?')));
     scene.add(g);
     return g;
+}
+// 依角色 / 被吃狀態調整其他玩家分身外觀：鬼=紅色+變大、被吃=變暗
+function styleOtherDrone(o) {
+    const g = o.group, body = g.userData.body;
+    if (o.role === 'ghost') { g.scale.setScalar(1.6); if (body) body.material.color.setHex(0xff2d55); if (body) body.material.emissive.setHex(0xff2d55); }
+    else { g.scale.setScalar(1); if (body && g.userData.baseColor) { body.material.color.copy(g.userData.baseColor); body.material.emissive.copy(g.userData.baseColor); } }
+    const op = o.eaten ? 0.25 : 1;
+    g.traverse(m => { if (m.material && 'opacity' in m.material) { m.material.transparent = true; m.material.opacity = op; } });
 }
 function makeArenaBalloon(b) {
     const color = BALLOON_COLORS[b.id % BALLOON_COLORS.length];
@@ -3427,6 +3446,7 @@ function handleArenaMessage(msg) {
     switch (msg.type) {
         case 'arena_state':
             arena.status = msg.status; arena.endTime = msg.endTime || 0;
+            if (msg.mode) arena.mode = msg.mode;
             arena.balloonMeshes.forEach(m => scene.remove(m)); arena.balloonMeshes.clear(); arena.pendingPop.clear();
             (msg.balloons || []).forEach(b => arena.balloonMeshes.set(b.id, makeArenaBalloon(b)));
             updateArenaScoreboard(msg.players || []);
@@ -3453,9 +3473,30 @@ function handleArenaMessage(msg) {
             arena.status = 'countdown'; showCountdownNumber(msg.n);
             break;
         case 'arena_go':
-            arena.status = 'running'; arena.endTime = msg.endTime; showCountdownNumber('GO');
+            arena.status = 'running'; arena.endTime = msg.endTime;
+            if (msg.mode) arena.mode = msg.mode;
             if (msg.spawns) applyMySpawn(msg.spawns);  // 後備：確保開賽時在自己出生點
-            setStateHUD('🏟️ 開搶！'); showToast('🏟️ 開始搶氣球！', 'success');
+            // 套用自己的角色（鬼抓人）
+            if (msg.players) { const me = msg.players.find(p => p.id === wsState.myId); if (me) setMyRole(me.role || 'runner', !!me.eaten); updateArenaPlayers(msg.players); }
+            if (arena.mode === 'tag') {
+                showCountdownNumber(arena.myRole === 'ghost' ? 'GO' : 'GO');
+                if (arena.myRole === 'ghost') { setStateHUD('👻 你是鬼！去抓人！'); showToast('👻 你是鬼！追上去撞掉所有人！', 'error'); }
+                else { setStateHUD('🏃 快逃！別被鬼撞到'); showToast('🏃 你是逃跑者！撐到時間到就贏！', 'success'); }
+            } else {
+                showCountdownNumber('GO'); setStateHUD('🏟️ 開搶！'); showToast('🏟️ 開始搶氣球！', 'success');
+            }
+            break;
+        case 'arena_eaten':
+            // 有人被吃掉
+            if (msg.id === wsState.myId) {
+                setMyRole(arena.myRole, true);
+                setStateHUD('💀 你被抓到了！觀戰中…');
+                showToast(`💀 被 ${msg.byName || '鬼'} 抓到了！`, 'error');
+                if (typeof playBumpSound === 'function') playBumpSound();
+            } else {
+                const o = arena.others.get(msg.id);
+                if (o) { o.eaten = true; styleOtherDrone(o); }
+            }
             break;
         case 'arena_scores':
             if (msg.status) arena.status = msg.status;
@@ -3463,34 +3504,69 @@ function handleArenaMessage(msg) {
             updateArenaScoreboard(msg.scores || []);
             break;
         case 'arena_end':
-            arena.status = 'ended'; showArenaResult(msg.ranking || []);
+            arena.status = 'ended';
+            if (msg.players) updateArenaPlayers(msg.players);
+            showArenaResult(msg);
             break;
     }
 }
 function updateArenaPlayers(list) {
     const seen = new Set();
     list.forEach(p => {
-        if (p.id === wsState.myId) return;
+        if (p.id === wsState.myId) {
+            // 更新自己的角色 / 被吃狀態
+            if (p.role !== undefined) setMyRole(p.role, !!p.eaten);
+            return;
+        }
         seen.add(p.id);
         let o = arena.others.get(p.id);
-        if (!o) { o = { group: makeGhostDrone(p.id, p.name, p.emoji), target: {} }; arena.others.set(p.id, o); }
+        if (!o) { o = { group: makeGhostDrone(p.id, p.name, p.emoji), target: {}, role: 'runner', eaten: false }; arena.others.set(p.id, o); }
         o.target = { x: p.x, y: p.y, z: p.z, yaw: p.yaw };
+        const role = p.role || 'runner', eaten = !!p.eaten;
+        if (o.role !== role || o.eaten !== eaten) { o.role = role; o.eaten = eaten; styleOtherDrone(o); }
     });
     for (const [id, o] of arena.others) {
         if (!seen.has(id)) { scene.remove(o.group); arena.others.delete(id); }
     }
 }
+// 設定自己的角色：套用機體外觀（鬼=放大+紅、被吃=變暗）
+function setMyRole(role, eaten) {
+    const changed = arena.myRole !== role || arena.eaten !== eaten;
+    arena.myRole = role; arena.eaten = eaten;
+    if (!changed) return;
+    if (typeof droneModel !== 'undefined' && droneModel) {
+        droneModel.scale.setScalar(role === 'ghost' ? 1.6 : 1);
+        droneModel.traverse(m => { if (m.material && 'opacity' in m.material) { m.material.transparent = true; m.material.opacity = eaten ? 0.3 : 1; } });
+    }
+}
 function updateArenaScoreboard(scores) {
     const el = document.getElementById('arena-scoreboard');
     if (!el) return;
-    el.innerHTML = (scores && scores.length)
-        ? scores.slice(0, 8).map((s, i) => `<div class="arena-row${s.id === wsState.myId ? ' me' : ''}"><span>${i + 1}. ${s.emoji || ''}${(s.name || '?')}</span><b>${s.score || 0}</b></div>`).join('')
-        : '<div class="arena-row">等待玩家加入…</div>';
+    if (!scores || !scores.length) { el.innerHTML = '<div class="arena-row">等待玩家加入…</div>'; return; }
+    if (arena.mode === 'tag') {
+        // 鬼抓人：用 arena.others + 自己組出角色/存活狀態（scores 沒帶 role，改用名次列表名稱對應）
+        const rows = scores.slice(0, 10).map(s => {
+            // 從 others / 自己 取得 role+eaten
+            let role = 'runner', eaten = false;
+            if (s.id === wsState.myId) { role = arena.myRole; eaten = arena.eaten; }
+            else { const o = arena.others.get(s.id); if (o) { role = o.role; eaten = o.eaten; } }
+            const tag = role === 'ghost' ? '👻' : (eaten ? '💀' : '🏃');
+            return `<div class="arena-row${s.id === wsState.myId ? ' me' : ''}"><span>${tag} ${s.emoji || ''}${(s.name || '?')}</span><b>${role === 'ghost' ? (s.score || 0) : (eaten ? '出局' : '存活')}</b></div>`;
+        });
+        el.innerHTML = rows.join('');
+    } else {
+        el.innerHTML = scores.slice(0, 8).map((s, i) => `<div class="arena-row${s.id === wsState.myId ? ' me' : ''}"><span>${i + 1}. ${s.emoji || ''}${(s.name || '?')}</span><b>${s.score || 0}</b></div>`).join('');
+    }
 }
-function showArenaResult(ranking) {
-    const top = ranking[0];
+function showArenaResult(msg) {
     setStateHUD('🏁 大亂鬥結束！');
-    showToast(top ? `🏆 冠軍：${top.emoji || ''}${top.name}（${top.score} 顆）` : '🏁 結束', 'success');
+    if (msg && msg.mode === 'tag') {
+        if (msg.winner === 'ghosts') showToast('👻 鬼勝！所有人都被抓光了！', 'error');
+        else showToast('🏃 人勝！有人撐到最後，鬼輸了！', 'success');
+    } else {
+        const top = (msg && msg.ranking && msg.ranking[0]);
+        showToast(top ? `🏆 冠軍：${top.emoji || ''}${top.name}（${top.score} 顆）` : '🏁 結束', 'success');
+    }
     if (typeof playCompleteSound === 'function') playCompleteSound();
 }
 function applyMySpawn(spawns) {
@@ -3528,14 +3604,22 @@ function arenaTick() {
             }
         });
     }
-    // 計時 HUD
+    // 計時 HUD（鬼抓人多顯示存活人數 + 我的角色）
     const tEl = document.getElementById('arena-timer');
     if (tEl) {
+        let t;
         if (arena.status === 'running' && arena.endTime) {
             const rem = Math.max(0, Math.ceil((arena.endTime - Date.now()) / 1000));
-            tEl.textContent = `⏱ ${Math.floor(rem / 60)}:${String(rem % 60).padStart(2, '0')}`;
-        } else if (arena.status === 'ended') tEl.textContent = '🏁 結束';
-        else tEl.textContent = '⏳ 等待老師開始';
+            t = `⏱ ${Math.floor(rem / 60)}:${String(rem % 60).padStart(2, '0')}`;
+        } else if (arena.status === 'ended') t = '🏁 結束';
+        else t = '⏳ 等待開始';
+        if (arena.mode === 'tag' && arena.status === 'running') {
+            let alive = 0; arena.others.forEach(o => { if (o.role === 'runner' && !o.eaten) alive++; });
+            if (arena.myRole === 'runner' && !arena.eaten) alive++;
+            const me = arena.eaten ? '💀觀戰' : (arena.myRole === 'ghost' ? '👻鬼' : '🏃逃');
+            t += ` ｜ 🏃存活 ${alive} ｜ ${me}`;
+        }
+        tEl.textContent = t;
     }
 }
 function spawnArenaObstacles() {
@@ -3605,6 +3689,7 @@ function enterArena() {
     const td = document.getElementById('timer-display'); if (td) td.style.display = 'none';
     document.querySelectorAll('.level-btn').forEach(b => b.classList.remove('active'));
     const ab = document.getElementById('arena-btn'); if (ab) ab.classList.add('active');
+    arena.mode = 'balloon'; setMyRole('runner', false);  // 重置角色 / 機體外觀
     resetDrone();
     spawnArenaObstacles();
     showArenaHud(true);
@@ -3628,6 +3713,7 @@ function exitArena() {
     // 還原格線地面給一般關卡用（playground 物件留著快取、僅隱藏）
     groundGrid.visible = true; ground.visible = true;
     if (_playgroundObj) _playgroundObj.visible = false;
+    setMyRole('runner', false);  // 還原機體大小/透明度
     showArenaHud(false);
     const ab = document.getElementById('arena-btn'); if (ab) ab.classList.remove('active');
     const td = document.getElementById('timer-display'); if (td) td.style.display = '';

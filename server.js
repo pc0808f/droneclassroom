@@ -87,10 +87,11 @@ function broadcastToStudents(msg) {
 // =====================================================================
 // 大亂鬥 Arena（多人即時搶氣球）—— 伺服器權威
 // =====================================================================
-const ARENA = { status: 'idle', balloons: [], endTime: 0, durationSec: 180 };
+const ARENA = { status: 'idle', mode: 'balloon', balloons: [], endTime: 0, durationSec: 180, ghostCount: 1, winner: null };
 const ARENA_BALLOON_COUNT = 50;
 const ARENA_BOUNDS = { x: 22, z: 22, ymin: 1.5, ymax: 10 };
 const ARENA_RESPAWN_MS = 2500;
+const ARENA_CATCH_DIST = 2.2;  // 鬼抓人：鬼撞到逃跑者的距離（鬼較大）
 
 function arenaRandPos() {
     return {
@@ -111,7 +112,7 @@ function broadcastArena(msg) {
     for (const s of arenaPlayers()) s.ws.send(data);
 }
 function arenaRanking() {
-    return arenaPlayers().map(s => ({ id: s.id, name: s.name, emoji: s.emoji, score: s.score || 0 }))
+    return arenaPlayers().map(s => ({ id: s.id, name: s.name, emoji: s.emoji, score: s.score || 0, role: s.role || 'runner', eaten: !!s.eaten }))
         .sort((a, b) => b.score - a.score);
 }
 // 把所有大亂鬥玩家平均散佈在一個圓上，避免 16 台疊在同一個出生點
@@ -128,25 +129,44 @@ function assignArenaSpawns() {
 function arenaSpawns() {
     return arenaPlayers().map(s => ({ id: s.id, x: s.spawnX || 0, z: s.spawnZ || 0 }));
 }
+function arenaPlayerInfo(s) {
+    return { id: s.id, name: s.name, emoji: s.emoji, score: s.score || 0, role: s.role || 'runner', eaten: !!s.eaten };
+}
 function arenaSnapshot() {
     return {
         type: 'arena_state',
         status: ARENA.status,
+        mode: ARENA.mode,
         endTime: ARENA.endTime,
         durationSec: ARENA.durationSec,
-        balloons: ARENA.balloons.filter(b => b.alive).map(b => ({ id: b.id, x: b.x, y: b.y, z: b.z })),
-        players: arenaPlayers().map(s => ({ id: s.id, name: s.name, emoji: s.emoji, score: s.score || 0 })),
+        balloons: ARENA.mode === 'balloon' ? ARENA.balloons.filter(b => b.alive).map(b => ({ id: b.id, x: b.x, y: b.y, z: b.z })) : [],
+        players: arenaPlayers().map(arenaPlayerInfo),
         spawns: arenaSpawns(),
     };
 }
+// 鬼抓人：開賽時隨機指派 ghostCount 個鬼，其餘為逃跑者
+function assignArenaRoles() {
+    const players = arenaPlayers();
+    const n = players.length;
+    const gc = Math.max(1, Math.min(ARENA.ghostCount || 1, Math.max(1, n - 1)));
+    // 洗牌
+    const idx = players.map((_, i) => i);
+    for (let i = idx.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [idx[i], idx[j]] = [idx[j], idx[i]]; }
+    const ghostSet = new Set(idx.slice(0, gc));
+    players.forEach((s, i) => { s.role = ghostSet.has(i) ? 'ghost' : 'runner'; s.eaten = false; });
+}
+function arenaAliveRunners() { return arenaPlayers().filter(s => s.role === 'runner' && !s.eaten); }
 function broadcastArenaScores() {
-    const msg = { type: 'arena_scores', scores: arenaRanking(), status: ARENA.status, endTime: ARENA.endTime };
+    const msg = { type: 'arena_scores', scores: arenaRanking(), status: ARENA.status, endTime: ARENA.endTime, mode: ARENA.mode };
     broadcastArena(msg);
     broadcastToTeachers(msg);
 }
-function arenaStart(durationSec) {
+function arenaStart(durationSec, mode, ghostCount) {
     ARENA.durationSec = durationSec;
-    for (const s of students.values()) if (s.arena) s.score = 0;
+    ARENA.mode = (mode === 'tag') ? 'tag' : 'balloon';
+    ARENA.ghostCount = ghostCount || 1;
+    ARENA.winner = null;
+    for (const s of students.values()) if (s.arena) { s.score = 0; s.role = 'runner'; s.eaten = false; }
     arenaInitBalloons();
     assignArenaSpawns();   // 指派各玩家的出生點（散佈在圓上）
     ARENA.status = 'countdown';
@@ -155,36 +175,63 @@ function arenaStart(durationSec) {
     const tick = () => {
         if (n > 0) { broadcastArena({ type: 'arena_countdown', n }); n--; setTimeout(tick, 1000); }
         else {
+            if (ARENA.mode === 'tag') assignArenaRoles();  // 倒數結束才指派鬼（GO 才變身）
             ARENA.status = 'running';
             ARENA.endTime = Date.now() + durationSec * 1000;
-            broadcastArena({ type: 'arena_go', endTime: ARENA.endTime, spawns: arenaSpawns() });
+            broadcastArena({ type: 'arena_go', mode: ARENA.mode, endTime: ARENA.endTime, spawns: arenaSpawns(), players: arenaPlayers().map(arenaPlayerInfo) });
             broadcastArenaScores();
-            console.log(`[Arena] 開始！${durationSec}s，${arenaPlayers().length} 人`);
+            console.log(`[Arena] 開始！${ARENA.mode} ${durationSec}s，${arenaPlayers().length} 人，鬼 ${ARENA.mode === 'tag' ? arenaPlayers().filter(s => s.role === 'ghost').length : 0}`);
         }
     };
     tick();
+}
+function arenaEnd(winner) {
+    ARENA.status = 'ended';
+    ARENA.winner = winner;
+    const msg = { type: 'arena_end', mode: ARENA.mode, winner, ranking: arenaRanking(), players: arenaPlayers().map(arenaPlayerInfo) };
+    broadcastArena(msg);
+    broadcastToTeachers(msg);   // 老師後台也要收到結束/勝負
+    broadcastArenaScores();
+    console.log(`[Arena] 結束：${ARENA.mode} winner=${winner}`);
 }
 
 // 伺服器 tick：氣球重生、結束判定、廣播所有玩家位置（~12Hz）
 setInterval(() => {
     const now = Date.now();
     if (ARENA.status === 'running') {
-        for (const b of ARENA.balloons) {
-            if (!b.alive && b.respawnAt && now >= b.respawnAt) {
-                Object.assign(b, arenaRandPos(), { alive: true, respawnAt: 0 });
-                broadcastArena({ type: 'arena_balloon', id: b.id, alive: true, x: b.x, y: b.y, z: b.z });
+        if (ARENA.mode === 'balloon') {
+            for (const b of ARENA.balloons) {
+                if (!b.alive && b.respawnAt && now >= b.respawnAt) {
+                    Object.assign(b, arenaRandPos(), { alive: true, respawnAt: 0 });
+                    broadcastArena({ type: 'arena_balloon', id: b.id, alive: true, x: b.x, y: b.y, z: b.z });
+                }
             }
-        }
-        if (now >= ARENA.endTime) {
-            ARENA.status = 'ended';
-            broadcastArena({ type: 'arena_end', ranking: arenaRanking() });
-            broadcastArenaScores();
-            console.log('[Arena] 時間到，結束。');
+            if (now >= ARENA.endTime) arenaEnd('time');
+        } else if (ARENA.mode === 'tag') {
+            // 鬼抓人：鬼撞到逃跑者 → 逃跑者被吃掉
+            const ps = arenaPlayers();
+            const ghosts = ps.filter(s => s.role === 'ghost');
+            for (const r of ps) {
+                if (r.role !== 'runner' || r.eaten) continue;
+                for (const g of ghosts) {
+                    const dx = (r.ax || 0) - (g.ax || 0), dy = (r.ay || 0) - (g.ay || 0), dz = (r.az || 0) - (g.az || 0);
+                    if (dx * dx + dy * dy + dz * dz < ARENA_CATCH_DIST * ARENA_CATCH_DIST) {
+                        r.eaten = true;
+                        g.score = (g.score || 0) + 1;  // 鬼的抓捕數
+                        broadcastArena({ type: 'arena_eaten', id: r.id, by: g.id, byName: g.name });
+                        broadcastArenaScores();
+                        break;
+                    }
+                }
+            }
+            // 勝負
+            if (arenaAliveRunners().length === 0) arenaEnd('ghosts');   // 全被吃 → 鬼勝
+            else if (now >= ARENA.endTime) arenaEnd('runners');         // 時間到還有人活 → 人勝
         }
     }
     const players = arenaPlayers();
     if (players.length) {
-        broadcastArena({ type: 'arena_players', players: players.map(s => ({ id: s.id, name: s.name, emoji: s.emoji, x: s.ax || 0, y: s.ay || 0.4, z: s.az || 0, yaw: s.ayaw || 0 })) });
+        broadcastArena({ type: 'arena_players', players: players.map(s => ({ id: s.id, name: s.name, emoji: s.emoji, role: s.role || 'runner', eaten: !!s.eaten, x: s.ax || 0, y: s.ay || 0.4, z: s.az || 0, yaw: s.ayaw || 0 })) });
     }
 }, 80);
 
@@ -202,8 +249,8 @@ wss.on('connection', (ws, req) => {
                     // 老師廣播：load_level / reset_all / race_start / show_message
                     broadcastToStudents(msg.payload);
                 } else if (msg.type === 'arena_start') {
-                    // 老師開始大亂鬥（3/5/7 分鐘）
-                    arenaStart(Math.max(30, msg.durationSec || 180));
+                    // 老師開始大亂鬥（mode: balloon | tag；tag 帶 ghostCount）
+                    arenaStart(Math.max(30, msg.durationSec || 180), msg.mode, msg.ghostCount);
                 } else if (msg.type === 'arena_state_req') {
                     ws.send(JSON.stringify(arenaSnapshot()));
                 }
