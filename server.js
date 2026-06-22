@@ -115,6 +115,19 @@ wss.on('connection', (ws, req) => {
             if (msg.type === 'register') {
                 s.name = msg.name;
                 s.emoji = msg.emoji;
+                // 同名 = 重連：移除舊的同名連線（避免老師後台堆積離線幽靈列），
+                // 並沿用舊進度（學生重新整理後排行/成績不會消失）。
+                for (const [otherWs, other] of students) {
+                    if (other !== s && other.name === s.name) {
+                        if (other.level != null && s.level == null) {
+                            s.level = other.level;
+                            s.time = other.time;
+                        }
+                        students.delete(otherWs);
+                        try { otherWs.close(4000, 'replaced by reconnect'); } catch (e) {}
+                        console.log(`[WS] ${s.name}${s.emoji} 重連，取代舊連線 ${other.id}`);
+                    }
+                }
                 console.log(`[WS] 學生上線：${s.name}${s.emoji} (${s.id})`);
                 broadcastToTeachers(studentListPayload());
             } else if (msg.type === 'complete_level') {
