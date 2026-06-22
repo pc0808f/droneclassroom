@@ -10,6 +10,7 @@
 
 import * as THREE from 'three';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 // =============================================================================
 // 1. Three.js scene 初始化
@@ -286,7 +287,9 @@ const arena = {
     others: new Map(),        // playerId -> { group, target }
     obstacles: [],
     posTimer: null,
+    playgroundOn: false,      // 大亂鬥背景：false = 格線競技場、true = playground 場景
 };
+let _playgroundObj = null, _playgroundLoading = false;
 const BALLOON_COLORS = [0xff4d6d, 0xffd166, 0x4dd0e1, 0x9b5de5, 0x4ade80, 0xff9f1c];
 
 // 載入 chapter1.json
@@ -3170,6 +3173,8 @@ document.querySelectorAll('.level-btn').forEach(btn => {
 {
     const ab = document.getElementById('arena-btn');
     if (ab) ab.addEventListener('click', () => { arena.active ? exitArena() : enterArena(); });
+    const sb = document.getElementById('arena-scene-btn');
+    if (sb) sb.addEventListener('click', () => setArenaScene(!arena.playgroundOn));
 }
 
 // v1.3 計時器更新（每幀）
@@ -3503,6 +3508,44 @@ function showArenaHud(on) {
     const el = document.getElementById('arena-hud');
     if (el) el.style.display = on ? 'block' : 'none';
 }
+// 大亂鬥背景場景切換：on = playground 模型（CC BY，純裝飾不參與碰撞）、off = 原本格線競技場
+function setArenaScene(on) {
+    arena.playgroundOn = on;
+    const btn = document.getElementById('arena-scene-btn');
+    if (btn) { btn.textContent = on ? '🌆 場景：playground' : '🟩 場景：格線'; btn.classList.toggle('active', on); }
+    if (on) {
+        groundGrid.visible = false; ground.visible = false;
+        if (_playgroundObj) { _playgroundObj.visible = true; return; }
+        if (_playgroundLoading) return;
+        _playgroundLoading = true;
+        showToast('🌆 載入 playground 場景中…', '');
+        new GLTFLoader().load('assets/maps/playground_2b.glb', (gltf) => {
+            const obj = gltf.scene;
+            // glTF 為 Y-up，與本場景一致，不需旋轉。量盒子 → 置中、縮放、落地。
+            let box = new THREE.Box3().setFromObject(obj);
+            const size = new THREE.Vector3(); box.getSize(size);
+            const span = Math.max(size.x, size.z) || 1;
+            obj.scale.setScalar(140 / span);             // 場地跨度約 140m，包住整個競技場
+            box = new THREE.Box3().setFromObject(obj);
+            const c = new THREE.Vector3(); box.getCenter(c);
+            obj.position.x -= c.x; obj.position.z -= c.z; // 水平置中於原點
+            obj.position.y -= box.min.y;                  // 地面落到 y=0
+            obj.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = true; } });
+            scene.add(obj);
+            _playgroundObj = obj; _playgroundLoading = false;
+            if (!arena.playgroundOn) obj.visible = false; // 載入完成時若已切回格線
+        }, undefined, (e) => {
+            _playgroundLoading = false;
+            console.warn('playground 載入失敗：', e);
+            showToast('⚠ 場景載入失敗，維持格線', 'warning');
+            arena.playgroundOn = false; groundGrid.visible = true; ground.visible = true;
+            if (btn) { btn.textContent = '🟩 場景：格線'; btn.classList.remove('active'); }
+        });
+    } else {
+        groundGrid.visible = true; ground.visible = true;
+        if (_playgroundObj) _playgroundObj.visible = false;
+    }
+}
 function enterArena() {
     if (arena.active) return;
     arena.active = true; arena.status = 'idle';
@@ -3519,6 +3562,7 @@ function enterArena() {
     resetDrone();
     spawnArenaObstacles();
     showArenaHud(true);
+    setArenaScene(arena.playgroundOn);  // 套用目前選的背景（格線 / playground）
     connectToTeacher();
     if (wsState.ws && wsState.ws.readyState === WebSocket.OPEN) wsState.ws.send(JSON.stringify({ type: 'arena_join' }));
     if (arena.posTimer) clearInterval(arena.posTimer);
@@ -3535,6 +3579,9 @@ function exitArena() {
     arena.others.forEach(o => scene.remove(o.group)); arena.others.clear();
     arena.obstacles.forEach(o => scene.remove(o)); arena.obstacles = [];
     obstacles = obstacles.filter(o => !(o.userData && o.userData.arena));
+    // 還原格線地面給一般關卡用（playground 物件留著快取、僅隱藏）
+    groundGrid.visible = true; ground.visible = true;
+    if (_playgroundObj) _playgroundObj.visible = false;
     showArenaHud(false);
     const ab = document.getElementById('arena-btn'); if (ab) ab.classList.remove('active');
     const td = document.getElementById('timer-display'); if (td) td.style.display = '';
