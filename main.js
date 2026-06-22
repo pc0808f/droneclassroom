@@ -266,7 +266,9 @@ let rings = [];
 let obstacles = [];
 let currentLevel = null;
 let chapterData = null;
-let levelStartTime = 0;
+let levelStartTime = 0;          // 0 = 尚未開始計時（按 OK + 3-2-1 倒數後才設定）
+let levelArmed = false;          // 本關是否已按 OK 啟動（避免重複觸發倒數）
+let levelCountdownActive = false; // 3-2-1 倒數中：鎖住操控、不判定過關
 // v1.4 6/22 修正 3：1-1/1-2/1-3 過關條件用 pass zone（visible disc + state check）
 let passZoneMeshes = [];
 let passZoneProgress = [];
@@ -371,7 +373,12 @@ function loadLevel(levelId) {
 
     // 重置 drone
     resetDrone();
-    levelStartTime = Date.now();
+    // 計時不在載入時開始：要等學生按「開始」+ 3-2-1 倒數後才從 0 起算
+    levelStartTime = 0;
+    levelArmed = false;
+    levelCountdownActive = false;
+    const lt0 = document.getElementById('level-timer'); if (lt0) lt0.textContent = '⏱ 0.0s';
+    const td0 = document.getElementById('timer-display'); if (td0) td0.textContent = '0.0s';
     programState.manualComplete = false;
 
     // v1.4 6/22 修正 3：建立 pass zone 視覺 discs + 初始化進度
@@ -539,8 +546,63 @@ function showLevelIntro(level) {
     if (titleEl) titleEl.textContent = `${level.id} · ${level.name}`;
     if (bodyEl) bodyEl.textContent = level.intro || '';
     modal.classList.add('show');
-    // 5 秒後自動關閉（學生按開始也關閉）
-    setTimeout(() => modal.classList.remove('show'), level.id === '1-0' ? 8000 : 12000);
+    // 不自動開始計時：等學生按「開始」。若太久沒按，當作 fallback 自動啟動。
+    const armId = level.id;
+    setTimeout(() => { if (currentLevel && currentLevel.id === armId) armLevelStart(); }, level.id === '1-0' ? 15000 : 20000);
+}
+
+// 按「開始」→ 關閉說明 → 3-2-1 倒數 → 開始計時（每關只觸發一次）
+function armLevelStart() {
+    if (levelArmed) return;
+    levelArmed = true;
+    const modal = document.getElementById('level-intro');
+    if (modal) modal.classList.remove('show');
+    runCountdown(() => {
+        levelStartTime = Date.now();   // 計時正式從 0 起算
+    });
+}
+
+// 3 → 2 → 1 → GO! 倒數（期間鎖住操控）
+function runCountdown(onGo) {
+    levelCountdownActive = true;
+    const el = document.getElementById('countdown-overlay');
+    let n = 3;
+    function tick() {
+        if (!el) { levelCountdownActive = false; if (onGo) onGo(); return; }
+        if (n > 0) {
+            el.textContent = String(n);
+            el.className = 'show';
+            // 重新觸發 pop 動畫
+            void el.offsetWidth;
+            el.classList.add('show');
+            playCountBeep(false);
+            n--;
+            setTimeout(tick, 700);
+        } else {
+            el.textContent = 'GO!';
+            el.className = 'show go';
+            playCountBeep(true);
+            levelCountdownActive = false;
+            if (onGo) onGo();
+            setTimeout(() => { el.className = ''; }, 650);
+        }
+    }
+    tick();
+}
+
+// 倒數提示音（短嗶；GO 較高音）。沿用 Web Audio，需使用者互動後才有聲（按 OK 即為互動）。
+function playCountBeep(isGo) {
+    const ctx = (typeof ensureAudio === 'function') ? ensureAudio() : null;
+    if (!ctx || (typeof audioState !== 'undefined' && audioState.muted)) return;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine';
+    o.frequency.value = isGo ? 880 : 440;
+    const t = ctx.currentTime, dur = isGo ? 0.45 : 0.18;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.25, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g).connect(ctx.destination);
+    o.start(t); o.stop(t + dur + 0.02);
 }
 
 // 起點指示
@@ -1056,8 +1118,8 @@ let currentMode = MODE.MANUAL;
 let isProgramRunning = false;
 
 function isManualLocked() {
-    // 手動鎖定條件：程式執行中，或當前在程式模式但程式未跑
-    return isProgramRunning || currentMode !== MODE.MANUAL;
+    // 手動鎖定條件：程式執行中、程式模式、或 3-2-1 倒數中
+    return isProgramRunning || currentMode !== MODE.MANUAL || levelCountdownActive;
 }
 
 function setMode(nextMode) {
@@ -2631,12 +2693,15 @@ function animate() {
     // 實心方塊碰撞：擋住 drone 不讓它穿過去（只對標了 solid 的障礙物）
     resolveObstacleCollisions();
 
-    // 不論手動 / 程式模式，每幀都檢查穿圈
-    checkRingCollisions();
-    // v1.4 6/22 修正 3：1-1/1-2/1-3 過關條件檢查
-    checkPassZones();
-    // 自由活動：氣球戳破檢查
-    checkBalloons();
+    // 3-2-1 倒數中不判定過關（避免倒數期間誤觸）
+    if (!levelCountdownActive) {
+        // 不論手動 / 程式模式，每幀都檢查穿圈
+        checkRingCollisions();
+        // v1.4 6/22 修正 3：1-1/1-2/1-3 過關條件檢查
+        checkPassZones();
+        // 自由活動：氣球戳破檢查
+        checkBalloons();
+    }
     updateLevelTimer();
 
     // 套用到模型
@@ -3036,8 +3101,7 @@ document.getElementById('home-btn').addEventListener('click', goHome);
 
 // v1.3 關卡教學 modal「開始」按鈕
 document.getElementById('level-intro-start').addEventListener('click', () => {
-    document.getElementById('level-intro').classList.remove('show');
-    showToast('▶ 開始！', 'success');
+    armLevelStart();
 });
 
 // v1.3 關卡選擇器
@@ -3052,10 +3116,17 @@ document.querySelectorAll('.level-btn').forEach(btn => {
 
 // v1.3 計時器更新（每幀）
 function updateLevelTimer() {
-    if (!currentLevel || !levelStartTime) return;
-    const elapsed = (Date.now() - levelStartTime) / 1000;
+    if (!currentLevel) return;
+    // levelStartTime=0 表示尚未開始（倒數前）→ 顯示 0.0s
+    const elapsed = levelStartTime ? (Date.now() - levelStartTime) / 1000 : 0;
+    const t = elapsed.toFixed(1);
     const timerEl = document.getElementById('level-timer');
-    if (timerEl) timerEl.textContent = `⏱ ${elapsed.toFixed(1)}s`;
+    if (timerEl) timerEl.textContent = `⏱ ${t}s`;
+    // 右上角徽章同步顯示同一個關卡計時（程式執行中由 updateStatus 顯示程式計時，不覆蓋）
+    if (!programState.running) {
+        const td = document.getElementById('timer-display');
+        if (td) td.textContent = `${t}s`;
+    }
 }
 
 // v1.3 靜音按鈕
