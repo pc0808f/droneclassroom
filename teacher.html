@@ -170,9 +170,13 @@
                     <option value="1-5">1-5 旋轉鑽圈</option>
                     <option value="1-6">1-6 氣球大冒險</option>
                 </select>
-                <button class="btn" onclick="loadLevel()">📋 載入關卡</button>
+                <button class="btn" onclick="loadLevel()">📋 全班切到此關卡（手動）</button>
                 <button class="btn danger" onclick="resetAll()">🔄 廣播重置</button>
                 <button class="btn success" onclick="raceStart()">🏁 開始比賽</button>
+            </div>
+            <div class="btn-row">
+                <button class="btn" onclick="forceMode('program')">🧩 全班切到「程式模式」</button>
+                <button class="btn" onclick="forceMode('manual')">🕹 全班切到「手動模式」</button>
             </div>
             <div class="btn-row">
                 <input id="msg-text" type="text" placeholder="廣播訊息（給所有學生）" style="flex: 1;">
@@ -307,6 +311,10 @@
             const id = document.getElementById('level-select').value;
             send({ type: 'load_level', levelId: id });
             showToast(`📋 載入 ${id}`, false);
+        }
+        function forceMode(mode) {
+            send({ type: 'set_mode', mode });
+            showToast(mode === 'program' ? '🧩 全班切到程式模式' : '🕹 全班切到手動模式', false);
         }
         function resetAll() {
             if (!confirm('確定要重置所有學生？')) return;

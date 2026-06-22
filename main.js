@@ -3320,14 +3320,27 @@ function connectToTeacher() {
             } else if (msg.type === 'load_level' && chapterData) {
                 const level = chapterData.levels.find(l => l.id === msg.levelId);
                 if (level) {
+                    if (arena.active) exitArena();          // 在大亂鬥中 → 先退出，場景才會真的切回關卡
+                    // 老師可指定模式：'program' 切到指令課程、否則切到手動關卡頁
+                    if (typeof setMode === 'function') setMode(msg.mode === 'program' ? MODE.PROGRAM : MODE.MANUAL);
                     loadLevel(msg.levelId);
-                    showToast(`📋 老師載入關卡：${level.name}`, 'success');
+                    // 同步左下關卡選單的 active 樣式
+                    document.querySelectorAll('.level-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-level') === msg.levelId));
+                    showToast(`📋 老師切換到：${level.name}`, 'success');
                 }
+            } else if (msg.type === 'set_mode') {
+                // 老師強制切換 手動 / 程式（指令課程）模式
+                if (arena.active) exitArena();
+                if (typeof setMode === 'function') setMode(msg.mode === 'program' ? MODE.PROGRAM : MODE.MANUAL);
+                showToast(msg.mode === 'program' ? '🧩 老師切到：程式模式' : '🕹 老師切到：手動模式', 'success');
             } else if (msg.type === 'reset_all') {
+                if (arena.active) exitArena();
                 if (currentLevel) loadLevel(currentLevel.id);
                 else resetDrone();
                 showToast('🔄 老師廣播：重置', 'success');
             } else if (msg.type === 'race_start' && chapterData) {
+                if (arena.active) exitArena();
+                if (typeof setMode === 'function') setMode(MODE.MANUAL);
                 loadLevel(msg.levelId || '1-4');
                 programState.raceStartTime = Date.now();
                 programState.raceActive = true;
