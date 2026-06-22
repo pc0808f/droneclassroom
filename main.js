@@ -1577,13 +1577,29 @@ function applyGamepadControls() {
 let bleController = null;
 let blePad = null;          // 最新一筆搖桿狀態（事件驅動，~20Hz）
 let blePadConnected = false;
+function setBleButton(text, connected) {
+    const btn = document.getElementById('connect-gamepad-btn');
+    if (!btn) return;
+    btn.textContent = text;
+    btn.classList.toggle('active', !!connected);
+    btn.title = connected ? '已連線 — 點擊可斷線' : '用藍牙連線 pyController 實體搖桿（需 HTTPS；iPad 請用 Bluefy）';
+}
 function setupBleController() {
     const btn = document.getElementById('connect-gamepad-btn');
     if (!window.DroneController) { if (btn) btn.title = '找不到 drone-controller.js'; return; }
     bleController = new window.DroneController();
-    bleController.onStatus = (t) => showToast('🎮 ' + t, /已連線/.test(t) ? 'success' : (/失敗|不支援|斷線/.test(t) ? true : ''));
+    bleController.onStatus = (t) => {
+        showToast('🎮 ' + t, /已連線/.test(t) ? 'success' : (/失敗|不支援|斷線/.test(t) ? true : ''));
+        if (/已連線/.test(t)) { blePadConnected = true; setBleButton('🎮 已連線 ✓', true); }
+        else if (/斷線|失敗/.test(t)) {   // 已斷線 / 連線失敗 → 重置狀態 + 歸零搖桿輸入
+            blePadConnected = false; blePad = null;
+            joystick.throttle = joystick.yaw = joystick.pitch = joystick.roll = 0;
+            setBleButton('🎮 連線搖桿', false);
+        } else if (/搜尋|連線中/.test(t)) { setBleButton('🎮 連線中…', false); }
+    };
     bleController.onData = (s) => { blePad = s; blePadConnected = true; };
     if (btn) btn.addEventListener('click', () => {
+        if (blePadConnected) { bleController.disconnect(); return; }   // 已連線 → 斷線
         if (!bleController.isSupported) { showToast('此瀏覽器不支援 Web Bluetooth；iPad 請改用 Bluefy 瀏覽器開此網址', true); return; }
         bleController.connect();
     });
@@ -4253,6 +4269,7 @@ window._creafly = {
     SOCCER, enterSoccer, exitSoccer, startDrill,
     _injectBlePad: (s) => { blePad = s; blePadConnected = true; },  // 測試用：模擬一筆 BLE 搖桿狀態
     get blePadConnected() { return blePadConnected; },
+    get _ble() { return bleController; },
     get currentLevel() { return currentLevel; },
     get playgroundBVHReady() { return !!_playgroundBVH; },
     get playgroundGeo() { return _playgroundGeo; },
