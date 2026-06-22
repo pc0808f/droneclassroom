@@ -30,9 +30,10 @@ class DroneController {
     this.server = null;
     this.txChar = null;
     this.rxChar = null;
-    // 油門/俯仰 Y 軸預設反向 (搖桿往上 = 數值變大)。實機若方向相反把對應的設成 false。
-    this.invertThrottle = true;
-    this.invertPitch = true;
+    // 油門/俯仰 Y 軸方向。實機測試後：兩個前後都相反，故改為不反向。
+    // 若日後又相反，把對應的設回 true 即可。
+    this.invertThrottle = false;
+    this.invertPitch = false;
     this.onData = null;    // (state) => {}
     this.onStatus = null;  // (text) => {}
     this._onNotify = this._onNotify.bind(this);
