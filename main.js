@@ -11,6 +11,8 @@
 import * as THREE from 'three';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { MeshBVH } from 'three-mesh-bvh';
 
 // =============================================================================
 // 1. Three.js scene 初始化
@@ -309,6 +311,65 @@ function clampArenaBounds() {
     // 地板由既有的 ground clamp 處理
 }
 let _playgroundObj = null, _playgroundLoading = false;
+let _playgroundBVH = null;   // playground 的網格碰撞索引(three-mesh-bvh)
+let _playgroundGeo = null;   // 合併後的碰撞幾何(供測試/除錯)
+
+// 用 playground 的所有 mesh(烤進世界座標、只留 position、統一非索引)合併成一個幾何,建 BVH
+function buildPlaygroundCollision(root) {
+    try {
+        root.updateWorldMatrix(true, true);
+        const geos = [];
+        root.traverse(o => {
+            if (!o.isMesh || !o.geometry || !o.geometry.attributes.position) return;
+            const src = o.geometry;
+            const g = new THREE.BufferGeometry();
+            g.setAttribute('position', src.attributes.position.clone());
+            if (src.index) g.setIndex(src.index.clone());
+            g.applyMatrix4(o.matrixWorld);
+            geos.push(g.index ? g.toNonIndexed() : g);  // 統一成非索引、只有 position → 可合併
+        });
+        if (!geos.length) { console.warn('[BVH] playground 無可用幾何'); return; }
+        const merged = mergeGeometries(geos, false);
+        if (!merged) { console.warn('[BVH] 幾何合併失敗'); return; }
+        _playgroundBVH = new MeshBVH(merged);
+        _playgroundGeo = merged;
+        console.log(`[BVH] playground 碰撞建好：${geos.length} mesh、${(merged.attributes.position.count / 3) | 0} 三角形`);
+    } catch (e) {
+        console.warn('[BVH] 建立 playground 碰撞失敗：', e);
+        _playgroundBVH = null;
+    }
+}
+
+// 每幀把 drone(視為半徑 DRONE_RADIUS 的球)從 playground 網格推出 → 不能穿過場地結構
+const _bvhSphere = new THREE.Sphere();
+const _bvhPt = new THREE.Vector3();
+const _bvhDir = new THREE.Vector3();
+const _bvhNormal = new THREE.Vector3();
+function resolvePlaygroundCollision() {
+    if (!_playgroundBVH) return;
+    _bvhSphere.center.copy(droneState.position);
+    _bvhSphere.radius = DRONE_RADIUS;
+    let hit = false;
+    _playgroundBVH.shapecast({
+        intersectsBounds: (box) => box.intersectsSphere(_bvhSphere),
+        intersectsTriangle: (tri) => {
+            tri.closestPointToPoint(_bvhSphere.center, _bvhPt);
+            const dist = _bvhPt.distanceTo(_bvhSphere.center);
+            if (dist < _bvhSphere.radius) {
+                _bvhDir.subVectors(_bvhSphere.center, _bvhPt);
+                if (_bvhDir.lengthSq() < 1e-8) { tri.getNormal(_bvhNormal); _bvhDir.copy(_bvhNormal); }
+                _bvhDir.normalize();
+                _bvhSphere.center.addScaledVector(_bvhDir, _bvhSphere.radius - dist);
+                hit = true;
+            }
+            return false;
+        }
+    });
+    if (hit) {
+        droneState.position.copy(_bvhSphere.center);
+        droneState.velocity.multiplyScalar(0.4);  // 撞到結構 → 大幅減速
+    }
+}
 const BALLOON_COLORS = [0xff4d6d, 0xffd166, 0x4dd0e1, 0x9b5de5, 0x4ade80, 0xff9f1c];
 
 // 載入 chapter1.json
@@ -3664,6 +3725,7 @@ function sendArenaPos() {
 }
 function arenaTick() {
     clampArenaBounds();   // 階段 1：飛不出場地邊界
+    if (arena.playgroundOn) resolvePlaygroundCollision();  // 階段 2：不能穿過 playground 結構
     const tagRunning = arena.mode === 'tag' && arena.status === 'running';
     // 第一輪：內插其他玩家位置，並收集「存活逃跑者」的位置（給光環危險度用）
     const runnerPos = [];
@@ -3748,7 +3810,7 @@ function setArenaScene(on) {
             let box = new THREE.Box3().setFromObject(obj);
             const size = new THREE.Vector3(); box.getSize(size);
             const span = Math.max(size.x, size.z) || 1;
-            obj.scale.setScalar(140 / span);             // 場地跨度約 140m，包住整個競技場
+            obj.scale.setScalar(48 / span);              // 縮到約 48m 跨度,讓結構落在 ±24 遊玩區、可當掩體
             box = new THREE.Box3().setFromObject(obj);
             const c = new THREE.Vector3(); box.getCenter(c);
             obj.position.x -= c.x; obj.position.z -= c.z; // 水平置中於原點
@@ -3756,6 +3818,7 @@ function setArenaScene(on) {
             obj.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = true; } });
             scene.add(obj);
             _playgroundObj = obj; _playgroundLoading = false;
+            buildPlaygroundCollision(obj);                // 階段 2：建網格碰撞(BVH)
             if (!arena.playgroundOn) obj.visible = false; // 載入完成時若已切回格線
         }, undefined, (e) => {
             _playgroundLoading = false;
@@ -3953,5 +4016,7 @@ window._creafly = {
     loadLevel, scene, arena, enterArena, exitArena,
     camera, cameraMode, droneModel,
     get currentLevel() { return currentLevel; },
+    get playgroundBVHReady() { return !!_playgroundBVH; },
+    get playgroundGeo() { return _playgroundGeo; },
     HOME_POSITION,
 };
