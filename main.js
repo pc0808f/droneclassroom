@@ -1284,8 +1284,8 @@ function detectGamepadSupport() {
     return true;
 }
 
-window.addEventListener('gamepadconnected', (e) => {
-    const gp = e.gamepad;
+function connectGamepad(gp) {
+    if (!gp || gamepadState.connected) return;
     gamepadState.connected = true;
     gamepadState.index = gp.index;
     gamepadState.id = gp.id;
@@ -1333,10 +1333,13 @@ window.addEventListener('gamepadconnected', (e) => {
     // 提示如果是非標準 mapping，教使用者用 URL 參數
     if (gamepadState.mapping === '' || gamepadState.mapping === 'non-standard') {
         setTimeout(() => {
-            showToast('⚠ 非標準 mapping — 若按鍵錯亂，加 ?map=switch 或 ?map=ipega 試試', 'error');
+            showToast('⚠ 非標準搖桿 — 按右上「⚙ 校正搖桿」做一次對映即可', 'error');
         }, 2500);
     }
-});
+}
+
+// 事件偵測（桌機 / Android 多半會觸發）
+window.addEventListener('gamepadconnected', (e) => connectGamepad(e.gamepad));
 
 window.addEventListener('gamepaddisconnected', (e) => {
     if (gamepadState.index === e.gamepad.index) {
@@ -1363,9 +1366,16 @@ window.addEventListener('gamepaddisconnected', (e) => {
 
 // 在主迴圈裡輪詢（Gamepad API 沒有 per-frame event）
 function pollGamepad() {
-    if (!gamepadState.connected) return;
-    const gamepads = navigator.getGamepads();
+    const gamepads = ('getGamepads' in navigator) ? navigator.getGamepads() : null;
     if (!gamepads) return;
+    // 主動掃描：iPad Safari 對非標準 / 自製搖桿常不觸發 gamepadconnected 事件，
+    // 所以即使沒事件，只要 getGamepads() 出現連線中的搖桿（使用者按一下按鍵後就會出現）就接上。
+    if (!gamepadState.connected) {
+        for (const g of gamepads) {
+            if (g && g.connected) { connectGamepad(g); break; }
+        }
+        if (!gamepadState.connected) return;
+    }
     const gp = gamepads[gamepadState.index];
     if (!gp) return;
     gamepadState.prevButtons = gamepadState.buttons.map(b => ({ ...b }));
