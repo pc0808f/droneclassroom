@@ -310,7 +310,8 @@ const SOCCER = {
 };
 // 場地尺寸(sim 單位,維持 2:1:1,放大到適合本模擬器的大無人機)
 // goalZ 往內縮(離端牆 4m)→ 飛機穿門後有空間、不會卡在邊線;goalY 抬高(真實約 2m 的相對高位)
-const SOC = { halfX: 7, halfZ: 14, top: 12, goalZ: 10, goalY: 9, goalR: 1.2, goalTube: 0.11 };
+const SOC = { halfX: 7, halfZ: 14, top: 12, goalZ: 10, goalY: 9, goalR: 1.2, goalTube: 0.11, startZ: 7 };
+// startZ=7：離近端短邊(z=14)約 7 單位 ≈ 場地長 1/4(對應真實「至少 1.5m」),飛機在此地面起飛
 // 比例:場地長 28 / 球直徑 1.6 ≈ 18 顆球長(可玩折衷,接近真實 6m÷0.2m=30 的感覺、又看得清飛機)
 const SOCCER_BALL_R = 0.8;       // 球形保護框半徑(也當足球碰撞半徑)
 const SOCCER_DRONE_SCALE = 0.65; // 足球模式把飛機縮小,讓場地相對變大、比例正確
@@ -4043,6 +4044,17 @@ const SOCCER_DRILLS = [
     { id: 'P-6', name: '兩端來回×3', type: 'shuttle', target: 3, desc: '穿遠端門→退回過中線→再穿,來回 3 次。' },
     { id: 'P-7', name: '限時多穿', type: 'pass', target: 999, timeLimit: 180, record: true, desc: '3 分鐘內盡量多穿門!' },
 ];
+// 起始區：地面長方形(填色 + 邊框),對應規則圖「起始區」。雙方各一個。
+function makeStartZone(centerZ, color) {
+    const w = 8, d = 5, g = new THREE.Group();
+    const fill = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.16, side: THREE.DoubleSide }));
+    fill.rotation.x = -Math.PI / 2; fill.position.set(0, 0.05, centerZ); fill.receiveShadow = true; g.add(fill);
+    const hw = w / 2, hd = d / 2, y = 0.07;
+    const pts = [new THREE.Vector3(-hw, y, centerZ - hd), new THREE.Vector3(hw, y, centerZ - hd),
+                 new THREE.Vector3(hw, y, centerZ + hd), new THREE.Vector3(-hw, y, centerZ + hd)];
+    g.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color })));
+    return g;
+}
 function makeGoalRing(z, color) {
     const ring = new THREE.Mesh(
         new THREE.TorusGeometry(SOC.goalR, SOC.goalTube, 16, 48),
@@ -4070,6 +4082,9 @@ function buildSoccerField() {
         .forEach(([w, h, dd, x, y, z]) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, dd), wallMat); m.position.set(x, y, z); objs.push(m); });
     const mid = new THREE.Mesh(new THREE.PlaneGeometry(SOC.halfX * 2, 0.3), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, side: THREE.DoubleSide }));
     mid.rotation.x = -Math.PI / 2; mid.position.set(0, 0.05, 0); objs.push(mid);
+    // 雙方起始區(對應規則圖):近端藍隊 z=+startZ、遠端紅隊 z=-startZ;飛機從藍隊起始區地面起飛
+    objs.push(makeStartZone(SOC.startZ, 0x3b82f6));
+    objs.push(makeStartZone(-SOC.startZ, 0xff4444));
     SOCCER.goalFar = makeGoalRing(-SOC.goalZ, 0xff4444); objs.push(SOCCER.goalFar);   // 遠端紅=攻
     SOCCER.goalNear = makeGoalRing(SOC.goalZ, 0x3b82f6); objs.push(SOCCER.goalNear);  // 近端藍=守
     objs.forEach(o => scene.add(o));
@@ -4099,9 +4114,9 @@ function clampSoccerBounds() {
     if (p.y > SOC.top - m) { p.y = SOC.top - m; if (v.y > 0) v.y = 0; }
 }
 function soccerResetDronePos() {
-    droneState.position.set(0, SOC.goalY, SOC.halfZ - 3);
+    droneState.position.set(0, HOME_POSITION.y, SOC.startZ);   // 起始區地面
     droneState.velocity.set(0, 0, 0); droneState.rotation.y = 0;
-    droneState.isFlying = true; droneState.isGrounded = false;
+    droneState.isFlying = false; droneState.isGrounded = true;  // 從起始區地面起飛
     SOCCER.prevZ = droneState.position.z;
 }
 const soccerBest = (id) => { try { return +(localStorage.getItem('creafly_soccer_' + id) || 0); } catch (e) { return 0; } };
