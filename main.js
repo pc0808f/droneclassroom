@@ -1051,7 +1051,8 @@ function setupJoystick() {
             joystick.yaw = 0;
             return;
         }
-        joystick.throttle = data.vector.y;   // 推上(-y) → throttle 負 → 上升
+        // nipplejs 推上是 +y；取負後對齊搖桿/鍵盤慣例：推上 = 負 = 上升（不再上下顛倒）
+        joystick.throttle = -data.vector.y;  // 推上 → throttle 負 → 上升 / 起飛
         joystick.yaw      = data.vector.x;   // 推右(+x) → yaw 正 → 機頭向右
         joystick.active = true;
     });
@@ -1073,7 +1074,8 @@ function setupJoystick() {
             joystick.roll = 0;
             return;
         }
-        joystick.pitch = data.vector.y;
+        // nipplejs 推上是 +y；取負後：推上 = 向前、推下 = 向後（不再前後顛倒）
+        joystick.pitch = -data.vector.y;
         joystick.roll  = data.vector.x;
         joystick.active = true;
     });

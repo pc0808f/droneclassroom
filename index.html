@@ -1085,6 +1085,21 @@
         }
         #arena-scoreboard .arena-row b { color: var(--creafly-green, #4ade80); }
         #arena-scoreboard .arena-row.me { background: rgba(255,206,0,0.22); font-weight: 700; }
+
+        /* 直向提示：iOS Safari 無法用程式鎖定方向，改全螢幕請使用者橫放 */
+        #rotate-prompt {
+            display: none;
+            position: fixed; inset: 0; z-index: 9999;
+            flex-direction: column; align-items: center; justify-content: center;
+            text-align: center; gap: 18px; padding: 24px;
+            background: linear-gradient(135deg, var(--creafly-cyan, #00A3E0), var(--creafly-green, #1B998B));
+            color: #fff; font-size: 22px; font-weight: 700;
+        }
+        #rotate-prompt .rot-icon { font-size: 72px; animation: rothint 1.8s ease-in-out infinite; }
+        @keyframes rothint { 0%, 100% { transform: rotate(0); } 55% { transform: rotate(90deg); } }
+        @media (orientation: portrait) and (pointer: coarse) {
+            #rotate-prompt { display: flex; }
+        }
         @keyframes cd-pop {
             0%   { transform: scale(2.2); opacity: 0; }
             25%  { opacity: 1; }
@@ -1692,6 +1707,12 @@
 
 <div id="error-display"></div>
 <div id="toast"></div>
+<!-- 直向時請使用者橫放（iOS Safari 無法程式鎖定方向）-->
+<div id="rotate-prompt">
+    <div class="rot-icon">📱</div>
+    <div>請將裝置「橫放」使用 🔄</div>
+    <div style="font-size:15px;opacity:.85;font-weight:400;">CREAFLY 無人機模擬器需要橫向螢幕</div>
+</div>
 <!-- 進關卡按「開始」後的 3-2-1 倒數 -->
 <div id="countdown-overlay"></div>
 <!-- 搖桿設定 toggle（top-center，只在接搖桿時出現，不屬右上角群組） -->
