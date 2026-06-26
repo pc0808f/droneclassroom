@@ -6,15 +6,19 @@
     {
       "id": "1-0",
       "name": "搖桿熱身",
-      "intro": "🛩️ 歡迎！\n\n這是熱身關，沒有任務、沒有計時。\n隨便推推看搖桿，熟悉一下油門（升降）跟方向（前後左右）。\n\n玩夠了，從下面的關卡列點「1-1」開始挑戰！",
+      "duration": 300,
+      "intro": "🛩️ 歡迎！\n\n這是熱身關，沒有任務、沒有計時。\n隨便推推看搖桿，熟悉一下油門（升降）跟方向（前後左右）。\n\n放心，5 分鐘後自動進到下一關。",
       "hud": "🕹️ 搖桿熱身中：隨便推推看",
-      "freeplay": true,
       "rings": [],
       "obstacles": [
         {"type": "soft-cube", "x": 8,  "y": 1.5, "z": 0,   "size": 1, "color": "#4ade80"},
         {"type": "soft-cube", "x": -8, "y": 1.5, "z": 0,   "size": 1, "color": "#4ade80"},
         {"type": "soft-cube", "x": 0,  "y": 1.5, "z": 8,   "size": 1, "color": "#4ade80"},
         {"type": "soft-cube", "x": 0,  "y": 1.5, "z": -8,  "size": 1, "color": "#4ade80"}
+      ],
+      "passZones": [
+        {"x": 0, "z": -2, "label": "起飛 ≥ 0.5m", "type": "altitude", "minY": 0.5},
+        {"x": 0, "z": -2, "label": "落地", "type": "altitude", "maxY": 0.5}
       ]
     },
     {
