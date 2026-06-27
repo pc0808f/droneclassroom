@@ -209,6 +209,164 @@ function arenaEnd(winner) {
     console.log(`[Arena] 結束：${ARENA.mode} winner=${winner}`);
 }
 
+// =====================================================================
+// ⚽ 無人機足球 3v3（多人連線對戰）—— 伺服器權威（T-501 骨幹）
+//   與大亂鬥 Arena 並存、旗標獨立（s.soccer vs s.arena）。
+//   球＝無人機本身（無共用球）；只有前鋒穿對方門得分（計分在 T-503）。
+//   場地常數需與 client（T-502）同一份：長軸 z（兩門連線）、寬 x、中線 z=0。
+// =====================================================================
+const SOCCER_FIELD = { halfX: 1.5, halfZ: 3, top: 3, goalZ: 2.8, goalY: 1.5, goalR: 1.2, midZ: 0 };
+const SOCCER_DURATION_DEFAULT = 180;   // 1 局 3 分鐘（測試可送較短 durationSec）
+// 每隊站位端 / 攻門 / 守門（z 軸）：藍隊站 -z 端、攻 +z 門；紅隊站 +z 端、攻 -z 門
+const SOCCER_TEAMS = {
+    blue: { stationZ: -SOCCER_FIELD.halfZ, attackGoalZ: +SOCCER_FIELD.goalZ, defendGoalZ: -SOCCER_FIELD.goalZ },
+    red:  { stationZ: +SOCCER_FIELD.halfZ, attackGoalZ: -SOCCER_FIELD.goalZ, defendGoalZ: +SOCCER_FIELD.goalZ },
+};
+const SOCCER = {
+    status: 'idle',            // idle | countdown | running | done
+    mode: '1x3min',
+    endTime: 0,
+    durationSec: SOCCER_DURATION_DEFAULT,
+    scores: { blue: 0, red: 0 },
+    armed: { blue: true, red: true },   // 半場重置用（T-503 計分時讀/寫）
+    winner: null,
+};
+
+const soccerPlayers = () => [...students.values()].filter(s => s.soccer && s.ws.readyState === 1);
+const soccerTeam = (team) => soccerPlayers().filter(s => s.team === team);
+function broadcastSoccer(msg) {
+    const data = JSON.stringify(msg);
+    for (const s of soccerPlayers()) s.ws.send(data);
+}
+// 自動平均分隊：新加入者補進人少的隊（藍/紅人數差 ≤ 1）
+function autoAssignTeam(s) {
+    const others = soccerPlayers().filter(p => p !== s);
+    const blue = others.filter(p => p.team === 'blue').length;
+    const red = others.filter(p => p.team === 'red').length;
+    s.team = (blue <= red) ? 'blue' : 'red';
+}
+// 確保某隊恰 1 名前鋒：0 名→補第一人；>1 名→只留第一個
+function ensureStriker(team) {
+    const members = soccerTeam(team);
+    if (!members.length) return;
+    const strikers = members.filter(s => s.striker);
+    if (strikers.length === 1) return;
+    const keep = strikers[0] || members[0];
+    members.forEach(s => { s.striker = (s === keep); });
+}
+// 老師指定前鋒（每隊強制恰 1 名）
+function setStriker(studentId) {
+    const s = soccerPlayers().find(p => p.id === studentId);
+    if (!s || !s.team) return false;
+    soccerTeam(s.team).forEach(p => { p.striker = (p === s); });
+    return true;
+}
+// 出生點：前鋒站中間（x≈0），防守沿 x 兩側排開；皆在自隊站位端、略內縮
+function assignSoccerSpawns() {
+    for (const team of ['blue', 'red']) {
+        const members = soccerTeam(team);
+        const z = +(SOCCER_TEAMS[team].stationZ * 0.85).toFixed(2);
+        const striker = members.find(s => s.striker);
+        const defenders = members.filter(s => !s.striker);
+        if (striker) { striker.spawnX = 0; striker.spawnZ = z; }
+        defenders.forEach((s, i) => {
+            const side = (i % 2 === 0) ? -1 : 1;
+            const mag = SOCCER_FIELD.halfX * (0.5 + 0.35 * Math.floor(i / 2));
+            s.spawnX = +(side * mag).toFixed(2);
+            s.spawnZ = z;
+        });
+    }
+}
+function soccerPlayerInfo(s) {
+    return { id: s.id, name: s.name, emoji: s.emoji, team: s.team || null, striker: !!s.striker };
+}
+function soccerSpawns() {
+    return soccerPlayers().map(s => ({ id: s.id, x: s.spawnX || 0, z: s.spawnZ || 0 }));
+}
+function soccerSnapshot() {
+    return {
+        type: 'soccer_state',
+        status: SOCCER.status, mode: SOCCER.mode,
+        endTime: SOCCER.endTime, durationSec: SOCCER.durationSec,
+        scores: SOCCER.scores, armed: SOCCER.armed, winner: SOCCER.winner,
+        players: soccerPlayers().map(soccerPlayerInfo),
+        spawns: soccerSpawns(),
+        field: SOCCER_FIELD,
+    };
+}
+function broadcastSoccerState() {
+    const snap = soccerSnapshot();
+    broadcastSoccer(snap);
+    broadcastToTeachers(snap);
+}
+function broadcastSoccerScores() {
+    const msg = { type: 'soccer_scores', scores: SOCCER.scores, armed: SOCCER.armed, status: SOCCER.status, endTime: SOCCER.endTime };
+    broadcastSoccer(msg);
+    broadcastToTeachers(msg);
+}
+function soccerJoin(s) {
+    s.soccer = true;
+    s.arena = false;                 // 與大亂鬥互斥
+    if (s.team !== 'blue' && s.team !== 'red') autoAssignTeam(s);
+    if (s.striker === undefined) s.striker = false;
+    ensureStriker(s.team);
+    s.ws.send(JSON.stringify(soccerSnapshot()));
+    broadcastSoccerState();
+    console.log(`[Soccer] ${s.name}${s.emoji} 加入 → ${s.team}${s.striker ? '（前鋒）' : ''}`);
+}
+function soccerLeave(s) {
+    const wasStriker = s.striker, team = s.team;
+    s.soccer = false; s.striker = false;
+    if (wasStriker && team) ensureStriker(team);   // 前鋒離開 → 遞補
+    broadcastSoccerState();
+}
+function soccerStart(durationSec) {
+    SOCCER.durationSec = Math.max(5, durationSec || SOCCER_DURATION_DEFAULT);
+    SOCCER.scores = { blue: 0, red: 0 };
+    SOCCER.armed = { blue: true, red: true };
+    SOCCER.winner = null;
+    ensureStriker('blue'); ensureStriker('red');   // 開賽前未指定的隊 → 自動補第一人
+    assignSoccerSpawns();
+    SOCCER.status = 'countdown';
+    broadcastSoccerState();
+    let n = 3;
+    const tick = () => {
+        if (SOCCER.status !== 'countdown') return;   // 中途被 reset → 停止倒數
+        if (n > 0) { broadcastSoccer({ type: 'soccer_countdown', n }); n--; setTimeout(tick, 1000); }
+        else {
+            SOCCER.status = 'running';
+            SOCCER.endTime = Date.now() + SOCCER.durationSec * 1000;
+            broadcastSoccer({ type: 'soccer_go', endTime: SOCCER.endTime, spawns: soccerSpawns(), players: soccerPlayers().map(soccerPlayerInfo), field: SOCCER_FIELD });
+            broadcastSoccerScores();
+            console.log(`[Soccer] 開始！${SOCCER.durationSec}s，藍 ${soccerTeam('blue').length} 紅 ${soccerTeam('red').length}`);
+        }
+    };
+    tick();
+}
+function soccerEnd(reason) {
+    SOCCER.status = 'done';
+    const { blue, red } = SOCCER.scores;
+    SOCCER.winner = blue > red ? 'blue' : (red > blue ? 'red' : 'draw');
+    const msg = { type: 'soccer_end', reason, winner: SOCCER.winner, scores: SOCCER.scores, players: soccerPlayers().map(soccerPlayerInfo) };
+    broadcastSoccer(msg);
+    broadcastToTeachers(msg);
+    broadcastSoccerScores();
+    console.log(`[Soccer] 結束：藍 ${blue} : ${red} 紅 → winner=${SOCCER.winner}（${reason}）`);
+}
+// 重設賽局 / 開新場：回 idle、比分歸零、清前鋒；clearTeams 連分隊重洗
+function soccerReset(clearTeams) {
+    SOCCER.status = 'idle';
+    SOCCER.scores = { blue: 0, red: 0 };
+    SOCCER.armed = { blue: true, red: true };
+    SOCCER.winner = null;
+    SOCCER.endTime = 0;
+    const players = soccerPlayers();
+    players.forEach(s => { s.striker = false; if (clearTeams) s.team = null; });
+    if (clearTeams) players.forEach((s, i) => { s.team = (i % 2 === 0) ? 'blue' : 'red'; });
+    broadcastSoccerState();
+    console.log(`[Soccer] 重設${clearTeams ? '（重新分隊）' : ''}，在場 ${players.length} 人`);
+}
+
 // 伺服器 tick：氣球重生、結束判定、廣播所有玩家位置（~12Hz）
 setInterval(() => {
     const now = Date.now();
@@ -247,6 +405,12 @@ setInterval(() => {
     if (players.length) {
         broadcastArena({ type: 'arena_players', players: players.map(s => ({ id: s.id, name: s.name, emoji: s.emoji, role: s.role || 'runner', eaten: !!s.eaten, x: s.ax || 0, y: s.ay || 0.4, z: s.az || 0, yaw: s.ayaw || 0 })) });
     }
+    // ⚽ 足球 tick：時間到判勝 + 廣播所有足球玩家位置（隊色/前鋒分身用）
+    if (SOCCER.status === 'running' && now >= SOCCER.endTime) soccerEnd('time');
+    const sp = soccerPlayers();
+    if (sp.length) {
+        broadcastSoccer({ type: 'soccer_players', players: sp.map(s => ({ id: s.id, name: s.name, emoji: s.emoji, team: s.team || null, striker: !!s.striker, x: s.sx || 0, y: s.sy || 0.4, z: s.sz || 0, yaw: s.syaw || 0 })) });
+    }
 }, 80);
 
 wss.on('connection', (ws, req) => {
@@ -267,6 +431,14 @@ wss.on('connection', (ws, req) => {
                     arenaStart(Math.max(30, msg.durationSec || 180), msg.mode, msg.ghostCount, msg.field);
                 } else if (msg.type === 'arena_state_req') {
                     ws.send(JSON.stringify(arenaSnapshot()));
+                } else if (msg.type === 'soccer_start') {
+                    soccerStart(msg.durationSec);
+                } else if (msg.type === 'soccer_state_req') {
+                    ws.send(JSON.stringify(soccerSnapshot()));
+                } else if (msg.type === 'soccer_set_striker') {
+                    if (setStriker(msg.studentId)) broadcastSoccerState();
+                } else if (msg.type === 'soccer_reset') {
+                    soccerReset(!!msg.clearTeams);
                 }
             } catch (e) {}
         });
@@ -336,15 +508,29 @@ wss.on('connection', (ws, req) => {
                         broadcastArenaScores();
                     }
                 }
+            } else if (msg.type === 'soccer_join') {
+                soccerJoin(s);
+            } else if (msg.type === 'soccer_leave') {
+                soccerLeave(s);
+            } else if (msg.type === 'soccer_pos') {
+                s.sx = msg.x; s.sy = msg.y; s.sz = msg.z; s.syaw = msg.yaw;
+            } else if (msg.type === 'soccer_goal') {
+                // 計分在 T-503（前鋒驗證 + 半場 armed）；T-501 骨幹先收下不計分
             }
         } catch (e) {}
     });
     ws.on('close', () => {
         console.log(`[WS] 學生斷線：${s.name}${s.emoji}`);
         const wasArena = s.arena;
+        const wasSoccer = s.soccer, wasStriker = s.striker, soccerTeamId = s.team;
         students.delete(ws);
         broadcastToTeachers(studentListPayload());
         if (wasArena) broadcastArenaScores();  // 更新大亂鬥排行（其他人會在下個 tick 移除其分身）
+        if (wasSoccer) {
+            s.soccer = false; s.striker = false;
+            if (wasStriker && soccerTeamId) ensureStriker(soccerTeamId);   // 前鋒斷線 → 遞補
+            broadcastSoccerState();
+        }
     });
 });
 
