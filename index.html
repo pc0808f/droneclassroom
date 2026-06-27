@@ -61,7 +61,26 @@
            切到 body.mode-program：左欄 420px 給 Blockly panel、場景在右欄
         */
         body.mode-manual #app  { grid-template-columns: 1fr; }
-        body.mode-program #app { grid-template-columns: 420px 1fr; }
+        /* 程式模式版面：預設「編輯放大」（積木大、飛機小預覽）；
+           加 .fly-max → 「試飛放大」（飛機大、積木小）。由 #btn-layout 一鍵切換。 */
+        body.mode-program #app         { grid-template-columns: 1fr 300px; }
+        body.mode-program.fly-max #app { grid-template-columns: 260px 1fr; }
+        /* 一鍵切換鈕：靠右、隨狀態變色 */
+        #btn-layout {
+            margin-left: auto;
+            background: rgba(0,163,224,0.18);
+            color: var(--creafly-dark);
+            border: 1px solid rgba(0,163,224,0.4);
+            border-radius: 8px;
+            padding: 6px 12px;
+            font-weight: 700;
+            font-size: 13px;
+            cursor: pointer;
+            white-space: nowrap;
+            font-family: inherit;
+        }
+        #btn-layout:active { transform: scale(0.97); }
+        body.fly-max #btn-layout { background: rgba(255,206,0,0.25); border-color: rgba(255,206,0,0.6); }
         #blockly-panel { display: none; }
         body.mode-manual #blockly-panel { display: none; }
         body.mode-program #blockly-panel {
@@ -1611,6 +1630,7 @@
             <button class="btn-run" id="btn-run">▶ 執行程式</button>
             <button class="btn-stop" id="btn-stop" disabled>■ 停止</button>
             <button class="btn-reset" id="btn-reset" title="重置無人機位置">↻</button>
+            <button class="btn-layout" id="btn-layout" title="放大積木編輯區 / 放大無人機試飛區">🚁 放大試飛區</button>
         </div>
     </div>
 

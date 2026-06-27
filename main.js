@@ -1347,9 +1347,15 @@ function setMode(nextMode) {
     if (modeEl) {
         modeEl.textContent = nextMode === MODE.MANUAL ? '🕹 手動' : '💻 程式';
     }
-    // 切到程式時：自動聚焦 Blockly workspace（讓學生直接拖積木）
-    if (nextMode === MODE.PROGRAM && typeof workspace !== 'undefined' && workspace) {
-        try { workspace.render(); } catch (e) {}
+    // 切到程式時：預設回「編輯放大」版面 + 自動聚焦 Blockly workspace（讓學生直接拖積木）
+    if (nextMode === MODE.PROGRAM) {
+        body.classList.remove('fly-max');
+        const lb = document.getElementById('btn-layout'); if (lb) lb.textContent = '🚁 放大試飛區';
+        if (typeof workspace !== 'undefined' && workspace) {
+            try { workspace.render(); } catch (e) {}
+            // panel 從隱藏變顯示 → 讓 Blockly 畫布重新撐滿
+            requestAnimationFrame(() => { try { if (window.Blockly) Blockly.svgResize(workspace); } catch (e) {} });
+        }
     }
     console.log(`[v${APP_VERSION}] 模式切換 → ${nextMode}`);
 }
@@ -3194,6 +3200,21 @@ initPlayer();  // v1.3 玩家登入
 animate();
 
 document.getElementById('btn-run').addEventListener('click', () => runProgram(workspace));
+
+// 一鍵切換版面：✏️ 編輯放大 ⇄ 🚁 試飛放大（iPad 橫用：編輯時積木大、試飛時飛機大）
+(function setupLayoutToggle() {
+    const lb = document.getElementById('btn-layout');
+    if (!lb) return;
+    lb.addEventListener('click', () => {
+        const fly = document.body.classList.toggle('fly-max');
+        lb.textContent = fly ? '✏️ 放大編輯區' : '🚁 放大試飛區';
+        // 3D 場景由 ResizeObserver 自動適配；Blockly 需手動 svgResize 撐滿新寬度
+        requestAnimationFrame(() => {
+            try { if (window.Blockly && typeof workspace !== 'undefined' && workspace) Blockly.svgResize(workspace); } catch (e) {}
+            if (typeof resize === 'function') resize();
+        });
+    });
+})();
 document.getElementById('btn-stop').addEventListener('click', stopProgram);
 document.getElementById('btn-reset').addEventListener('click', resetDrone);
 
