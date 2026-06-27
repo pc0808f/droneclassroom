@@ -351,6 +351,9 @@ const soccerNet = {
     myStriker: false,
     endTime: 0,
     scores: { blue: 0, red: 0 },
+    armed: { blue: true, red: true },   // 半場重置狀態（T-503）：false = 該隊前鋒須過中線才能再得分
+    prevZ: 0,                  // 上一幀 z（穿門偵測用）
+    goalCooldown: 0,           // 進球去抖（避免一次穿越連報）
     others: new Map(),         // id → { group, target, team, striker }
     objs: [],                  // 場地 3D 物件
     ball: null,                // 自己的球形外框
@@ -4549,7 +4552,9 @@ function updateSoccerMatchHud() {
     } else if (soccerNet.status === 'countdown') t = '3-2-1…';
     else if (soccerNet.status === 'done') t = '🏁 結束';
     const meTeam = soccerNet.myTeam === 'red' ? '🔴紅' : (soccerNet.myTeam === 'blue' ? '🔵藍' : '—');
-    lt.textContent = `⚽ 🔵${s.blue} : ${s.red}🔴 ｜ ${t} ｜ 我:${meTeam}${soccerNet.myStriker ? '🎀前鋒' : '🛡防守'}`;
+    // 半場重置提示：自隊 armed=false（剛得分）→ 提醒前鋒退回中線
+    const needBack = soccerNet.myTeam && soccerNet.armed && soccerNet.armed[soccerNet.myTeam] === false && soccerNet.status === 'running';
+    lt.textContent = `⚽ 🔵${s.blue} : ${s.red}🔴 ｜ ${t} ｜ 我:${meTeam}${soccerNet.myStriker ? '🎀前鋒' : '🛡防守'}${needBack ? ' ｜ ⚠️先退回半場' : ''}`;
 }
 function showSoccerResult(msg) {
     const s = msg.scores || soccerNet.scores;
@@ -4566,6 +4571,7 @@ function handleSoccerMessage(msg) {
         case 'soccer_state':
             soccerNet.status = msg.status; soccerNet.endTime = msg.endTime || 0;
             if (msg.scores) soccerNet.scores = msg.scores;
+            if (msg.armed) soccerNet.armed = msg.armed;
             applyMyTeamRole(msg.players);
             updateSoccerPlayers(msg.players);
             if (msg.spawns && (msg.status === 'countdown' || msg.status === 'idle')) applyMySoccerSpawn(msg.spawns);
@@ -4590,6 +4596,18 @@ function handleSoccerMessage(msg) {
             if (msg.status) soccerNet.status = msg.status;
             if (msg.endTime) soccerNet.endTime = msg.endTime;
             if (msg.scores) soccerNet.scores = msg.scores;
+            if (msg.armed) soccerNet.armed = msg.armed;
+            updateSoccerMatchHud();
+            break;
+        case 'soccer_goal_ok':
+            if (msg.scores) soccerNet.scores = msg.scores;
+            if (typeof playRingSound === 'function') playRingSound();
+            if (msg.team === soccerNet.myTeam) {
+                showToast(`⚽ 進球！${msg.byName || ''}`, 'success');
+                if (soccerNet.myStriker) setStateHUD('⚽ 進球！先退回中線（過半場）才能再得分');
+            } else {
+                showToast(`😮 對方進球（${msg.byName || ''}）`, '');
+            }
             updateSoccerMatchHud();
             break;
         case 'soccer_end':
@@ -4609,6 +4627,22 @@ function soccerNetTick() {
     clampSoccerMatchBounds();
     if (soccerNet.ball) soccerNet.ball.position.copy(droneState.position);  // 球形外框貼齊自機
     updateMyRibbon();
+    // T-503 前鋒穿對方門偵測（朝正向 + 在門環內 + 該隊 armed）→ 上報 server（server 才計分）
+    if (soccerNet.status === 'running' && soccerNet.myStriker && soccerNet.myTeam) {
+        const attackZ = (soccerNet.myTeam === 'blue') ? SOCM.goalZ : -SOCM.goalZ;
+        const z = droneState.position.z, pz = soccerNet.prevZ;
+        const fwdZ = -Math.cos(droneState.rotation.y);   // 機頭世界前向的 z 分量（>0 朝 +z）
+        const crossing = (soccerNet.myTeam === 'blue')
+            ? (pz < attackZ && z >= attackZ && fwdZ > 0)    // 藍：朝 +z 穿過 +z 門
+            : (pz > attackZ && z <= attackZ && fwdZ < 0);   // 紅：朝 -z 穿過 -z 門
+        const inRing = Math.abs(droneState.position.x) < SOCM.goalR && Math.abs(droneState.position.y - SOCM.goalY) < SOCM.goalR;
+        const armed = !soccerNet.armed || soccerNet.armed[soccerNet.myTeam] !== false;
+        if (crossing && inRing && armed && performance.now() > soccerNet.goalCooldown) {
+            soccerNet.goalCooldown = performance.now() + 1500;
+            if (wsState.ws && wsState.ws.readyState === WebSocket.OPEN) wsState.ws.send(JSON.stringify({ type: 'soccer_goal' }));
+        }
+    }
+    soccerNet.prevZ = droneState.position.z;
     // 內插其他玩家分身位置
     soccerNet.others.forEach(o => {
         if (o.target.x !== undefined) {

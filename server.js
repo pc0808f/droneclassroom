@@ -254,6 +254,7 @@ function ensureStriker(team) {
     const keep = strikers[0] || members[0];
     members.forEach(s => { s.striker = (s === keep); });
 }
+function soccerStrikerOf(team) { return soccerTeam(team).find(s => s.striker); }
 // 老師指定前鋒（每隊強制恰 1 名）
 function setStriker(studentId) {
     const s = soccerPlayers().find(p => p.id === studentId);
@@ -405,7 +406,17 @@ setInterval(() => {
     if (players.length) {
         broadcastArena({ type: 'arena_players', players: players.map(s => ({ id: s.id, name: s.name, emoji: s.emoji, role: s.role || 'runner', eaten: !!s.eaten, x: s.ax || 0, y: s.ay || 0.4, z: s.az || 0, yaw: s.ayaw || 0 })) });
     }
-    // ⚽ 足球 tick：時間到判勝 + 廣播所有足球玩家位置（隊色/前鋒分身用）
+    // ⚽ 足球 tick：半場重置 + 時間到判勝 + 廣播所有足球玩家位置（隊色/前鋒分身用）
+    if (SOCCER.status === 'running') {
+        // 半場重置：得分後 armed=false 的隊，其前鋒過中線回自家半場 → 恢復可得分
+        for (const team of ['blue', 'red']) {
+            if (SOCCER.armed[team]) continue;
+            const st = soccerStrikerOf(team);
+            if (!st) continue;
+            const ownHalfNeg = SOCCER_TEAMS[team].stationZ < 0;   // 藍隊自家半場 z<0、紅隊 z>0
+            if (ownHalfNeg ? ((st.sz || 0) < 0) : ((st.sz || 0) > 0)) { SOCCER.armed[team] = true; broadcastSoccerScores(); }
+        }
+    }
     if (SOCCER.status === 'running' && now >= SOCCER.endTime) soccerEnd('time');
     const sp = soccerPlayers();
     if (sp.length) {
@@ -515,7 +526,20 @@ wss.on('connection', (ws, req) => {
             } else if (msg.type === 'soccer_pos') {
                 s.sx = msg.x; s.sy = msg.y; s.sz = msg.z; s.syaw = msg.yaw;
             } else if (msg.type === 'soccer_goal') {
-                // 計分在 T-503（前鋒驗證 + 半場 armed）；T-501 骨幹先收下不計分
+                // T-503 計分：伺服器權威驗證 — 必須是前鋒、該隊 armed、且位置確在對方門環內
+                if (SOCCER.status === 'running' && s.soccer && s.striker && s.team && SOCCER.armed[s.team]) {
+                    const cfg = SOCCER_TEAMS[s.team];
+                    const nearGoal = Math.abs((s.sz || 0) - cfg.attackGoalZ) < 1.0
+                        && Math.abs(s.sx || 0) < SOCCER_FIELD.goalR
+                        && Math.abs((s.sy || 0) - SOCCER_FIELD.goalY) < SOCCER_FIELD.goalR;
+                    if (nearGoal) {
+                        SOCCER.scores[s.team] = (SOCCER.scores[s.team] || 0) + 1;
+                        SOCCER.armed[s.team] = false;   // 半場重置：前鋒須過中線才能再得分
+                        const ok = { type: 'soccer_goal_ok', team: s.team, by: s.id, byName: s.name, scores: SOCCER.scores };
+                        broadcastSoccer(ok); broadcastToTeachers(ok); broadcastSoccerScores();
+                        console.log(`[Soccer] ⚽ ${s.name}（${s.team}）進球！藍 ${SOCCER.scores.blue} : ${SOCCER.scores.red} 紅`);
+                    }
+                }
             }
         } catch (e) {}
     });

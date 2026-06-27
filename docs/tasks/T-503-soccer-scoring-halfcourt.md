@@ -8,7 +8,7 @@
 | **估時** | 1 天 |
 | **負責** | drone-coder |
 | **測試** | drone-reviewer |
-| **狀態** | pending |
+| **狀態** | ✅ 完成（`server.js` + `main.js`，`validate-t503.js` 10/10 PASS）|
 | **設計依據** | `docs/drone-soccer-design.md` §2.3、§3 |
 
 ---
