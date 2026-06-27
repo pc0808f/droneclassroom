@@ -340,6 +340,23 @@ const SOC = { halfX: 7, halfZ: 14, top: 12, goalZ: 10, goalY: 9, goalR: 1.2, goa
 // 比例:場地長 28 / 球直徑 1.6 ≈ 18 顆球長(可玩折衷,接近真實 6m÷0.2m=30 的感覺、又看得清飛機)
 const SOCCER_BALL_R = 0.8;       // 球形保護框半徑(也當足球碰撞半徑)
 const SOCCER_DRONE_SCALE = 0.65; // 足球模式把飛機縮小,讓場地相對變大、比例正確
+// ⚽ 多人足球對戰（連線）—— 狀態宣告在前段避免 TDZ（animate / isManualLocked 會用到）。
+// SOCM 場地常數須與 server.js 的 SOCCER_FIELD 同一份（6×3×3、中線 z=0、兩端門）。
+const SOCM = { halfX: 1.5, halfZ: 3, top: 3, goalZ: 2.8, goalY: 1.5, goalR: 1.2 };
+const SOCCER_MATCH_SCALE = 0.32;  // 6×3×3 小場地把飛機縮更小（比單人練習場小很多）
+const soccerNet = {
+    active: false,
+    status: 'idle',            // idle | countdown | running | done
+    myTeam: null,              // 'blue' | 'red'
+    myStriker: false,
+    endTime: 0,
+    scores: { blue: 0, red: 0 },
+    others: new Map(),         // id → { group, target, team, striker }
+    objs: [],                  // 場地 3D 物件
+    ball: null,                // 自己的球形外框
+    goalBlue: null, goalRed: null,
+    posTimer: null,
+};
 const GHOST_SPEED = 1.5;     // 鬼飛比較快
 const GHOST_CATCH_R = 2.2;   // 鬼的抓捕範圍（與 server ARENA_CATCH_DIST 一致）
 let myCatchAura = null;      // 自己是鬼時的抓捕光環
@@ -476,6 +493,7 @@ function clearLevelObjects() {
 function loadLevel(levelId) {
     if (!chapterData) return;
     if (SOCCER.active) exitSoccer();   // 老師強制載入關卡時也離開足球練習
+    if (soccerNet.active) exitSoccerMatch();   // 也離開多人足球對戰
     const level = chapterData.levels.find(l => l.id === levelId);
     if (!level) {
         console.warn('找不到關卡：', levelId);
@@ -1308,6 +1326,7 @@ function isManualLocked() {
     // 手動鎖定條件：程式執行中、程式模式、3-2-1 倒數中、大亂鬥倒數中、足球倒數中
     if (arena.active && arena.status === 'countdown') return true;
     if (SOCCER.active && SOCCER.status === 'countdown') return true;
+    if (soccerNet.active && soccerNet.status === 'countdown') return true;
     return isProgramRunning || currentMode !== MODE.MANUAL || levelCountdownActive;
 }
 
@@ -3045,6 +3064,9 @@ function animate() {
 
     if (SOCCER.active) {
         soccerTick();
+    } else if (soccerNet.active) {
+        // 多人足球對戰：跑連線邏輯（邊界 + 內插他人 + HUD），跳過一般關卡判定
+        soccerNetTick();
     } else if (arena.active) {
         // 大亂鬥模式：跑 arena 邏輯，跳過一般關卡判定
         arenaTick();
@@ -3110,7 +3132,13 @@ function animate() {
     });
 
     // 鏡頭
-    if (SOCCER.active && !cameraMode.fpv) {
+    if (soccerNet.active && !cameraMode.fpv) {
+        // 多人足球：窄邊定點隊伍視角（高 1.5m，站自隊窄邊往場內看；紅站 +z 看 -z、藍站 -z 看 +z）
+        if (!droneModel.visible) droneModel.visible = true;
+        const sign = (soccerNet.myTeam === 'red') ? 1 : -1;
+        camera.position.set(0, SOCM.goalY, sign * (SOCM.halfZ + 2.4));
+        camera.lookAt(0, SOCM.goalY - 0.3, -sign * SOCM.halfZ);
+    } else if (SOCCER.active && !cameraMode.fpv) {
         // 足球：窄邊定點視角（站在己方端線後方一大步、略高，看向場內/遠端門）
         if (!droneModel.visible) droneModel.visible = true;
         camera.position.set(0, SOC.goalY - 3, SOC.halfZ + 9);   // 視線降低一個球門
@@ -3484,6 +3512,7 @@ document.querySelectorAll('.level-btn').forEach(btn => {
         if (!levelId) return;            // 大亂鬥 / 足球鈕沒有 data-level，交給各自的 handler
         if (arena.active) exitArena();   // 從大亂鬥切回一般關卡
         if (SOCCER.active) exitSoccer(); // 從足球練習切回一般關卡
+        if (soccerNet.active) exitSoccerMatch(); // 從多人足球切回一般關卡
         document.querySelectorAll('.level-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         loadLevel(levelId);
@@ -3504,9 +3533,11 @@ document.querySelectorAll('.level-btn').forEach(btn => {
 // 大亂鬥 / 足球入口
 {
     const ab = document.getElementById('arena-btn');
-    if (ab) ab.addEventListener('click', () => { if (SOCCER.active) exitSoccer(); arena.active ? exitArena() : enterArena(); closeLevelMenu(); });
+    if (ab) ab.addEventListener('click', () => { if (SOCCER.active) exitSoccer(); if (soccerNet.active) exitSoccerMatch(); arena.active ? exitArena() : enterArena(); closeLevelMenu(); });
     const sb = document.getElementById('soccer-btn');
-    if (sb) sb.addEventListener('click', () => { SOCCER.active ? exitSoccer() : enterSoccer(); closeLevelMenu(); });
+    if (sb) sb.addEventListener('click', () => { if (soccerNet.active) exitSoccerMatch(); SOCCER.active ? exitSoccer() : enterSoccer(); closeLevelMenu(); });
+    const mb = document.getElementById('soccer-mp-btn');
+    if (mb) mb.addEventListener('click', () => { if (SOCCER.active) exitSoccer(); if (arena.active) exitArena(); soccerNet.active ? exitSoccerMatch() : enterSoccerMatch(); closeLevelMenu(); });
 }
 
 // iPad/iOS：擋掉「雙指縮放」(雙擊縮放由 CSS touch-action 處理)，避免學生不小心放大網頁就不能玩
@@ -3676,6 +3707,10 @@ function connectToTeacher() {
         if (typeof arena !== 'undefined' && arena.active) {
             ws.send(JSON.stringify({ type: 'arena_join' }));
         }
+        // 若正在多人足球（含重連），重新加入
+        if (typeof soccerNet !== 'undefined' && soccerNet.active) {
+            ws.send(JSON.stringify({ type: 'soccer_join' }));
+        }
         // T-105：斷線過才顯示「已恢復」（首次連線只用 toast，不打擾）
         if (wsState.wasDown) {
             setConnStatus('up');
@@ -3693,6 +3728,8 @@ function connectToTeacher() {
                 console.log('[v1.3 WS] welcome', msg.id);
             } else if (msg.type && msg.type.indexOf('arena_') === 0) {
                 handleArenaMessage(msg);
+            } else if (msg.type && msg.type.indexOf('soccer_') === 0) {
+                handleSoccerMessage(msg);
             } else if (msg.type === 'load_level' && chapterData) {
                 const level = chapterData.levels.find(l => l.id === msg.levelId);
                 if (level) {
@@ -4377,6 +4414,261 @@ function updateSoccerHud() {
     } else if (SOCCER.status === 'countdown') s += ' ｜ 準備…';
     else if (SOCCER.status === 'done') s += ' ｜ ✓ 完成';
     el.textContent = s;
+}
+
+// =============================================================================
+// 16b. ⚽ 多人足球對戰（連線；伺服器權威見 server.js T-501）
+//      重用 Arena 的分身/內插/名牌概念；場地 6×3×3 與 server SOCCER_FIELD 對齊。
+//      計分/穿門偵測在 T-503；本段負責：進場連線、他人分身（隊色+前鋒彩帶）、窄邊隊伍視角。
+// =============================================================================
+const SOCCER_TEAM_COLORS = { blue: 0x3b82f6, red: 0xff4444 };
+function soccerTeamColorHex(team) { return SOCCER_TEAM_COLORS[team] || 0x9aa0a6; }
+
+// 前鋒識別彩帶：機體上方一條醒目亮黃飄帶（不做布料物理，tick 內輕微擺動）
+function makeStrikerRibbon() {
+    const g = new THREE.Group();
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffe066, side: THREE.DoubleSide, transparent: true, opacity: 0.95 });
+    const band = new THREE.Mesh(new THREE.PlaneGeometry(0.14, 0.9), mat);
+    band.position.y = 0.6; g.add(band);
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.18, 4), new THREE.MeshBasicMaterial({ color: 0xffd000 }));
+    tip.position.y = 1.06; g.add(tip);
+    g.userData.band = band;
+    return g;
+}
+// 他人分身：機體用隊色、前鋒掛彩帶、加名牌（重用 makeNameLabel）
+function makeSoccerDrone(p) {
+    const g = new THREE.Group();
+    const col = new THREE.Color(soccerTeamColorHex(p.team));
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.14, 0.5), new THREE.MeshPhongMaterial({ color: col, emissive: col, emissiveIntensity: 0.3 }));
+    g.add(body);
+    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.22, 10), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+    nose.rotation.x = Math.PI / 2; nose.position.z = -0.33; g.add(nose);
+    g.userData.body = body;
+    g.add(makeNameLabel((p.emoji || '') + (p.name || '?')));
+    const ribbon = makeStrikerRibbon(); ribbon.visible = !!p.striker; g.add(ribbon); g.userData.ribbon = ribbon;
+    scene.add(g);
+    return g;
+}
+function makeMatchGoal(z, color) {
+    const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(SOCM.goalR, 0.07, 14, 40),
+        new THREE.MeshPhongMaterial({ color, emissive: color, emissiveIntensity: 0.45, shininess: 80 }));
+    ring.position.set(0, SOCM.goalY, z);   // 孔朝 z → 沿長軸穿過
+    ring.castShadow = true;
+    return ring;
+}
+function clearSoccerMatchField() {
+    soccerNet.objs.forEach(o => scene.remove(o));
+    soccerNet.objs = [];
+    soccerNet.goalBlue = soccerNet.goalRed = null;
+}
+function buildSoccerMatchField() {
+    clearSoccerMatchField();
+    const objs = soccerNet.objs;
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(SOCM.halfX * 2, SOCM.halfZ * 2), new THREE.MeshPhongMaterial({ color: 0x3a7d44 }));
+    floor.rotation.x = -Math.PI / 2; floor.position.y = 0.02; floor.receiveShadow = true; objs.push(floor);
+    // 半場淡隊色（藍 -z 半場、紅 +z 半場），幫助分辨攻守方向
+    [['blue', -1], ['red', 1]].forEach(([team, s]) => {
+        const half = new THREE.Mesh(new THREE.PlaneGeometry(SOCM.halfX * 2, SOCM.halfZ), new THREE.MeshBasicMaterial({ color: soccerTeamColorHex(team), transparent: true, opacity: 0.08, side: THREE.DoubleSide }));
+        half.rotation.x = -Math.PI / 2; half.position.set(0, 0.03, s * SOCM.halfZ / 2); objs.push(half);
+    });
+    const wallMat = new THREE.MeshPhongMaterial({ color: 0x4dd0e1, transparent: true, opacity: 0.12, side: THREE.DoubleSide });
+    [[SOCM.halfX * 2, SOCM.top, 0.1, 0, SOCM.top / 2, -SOCM.halfZ], [SOCM.halfX * 2, SOCM.top, 0.1, 0, SOCM.top / 2, SOCM.halfZ],
+     [0.1, SOCM.top, SOCM.halfZ * 2, -SOCM.halfX, SOCM.top / 2, 0], [0.1, SOCM.top, SOCM.halfZ * 2, SOCM.halfX, SOCM.top / 2, 0]]
+        .forEach(([w, h, dd, x, y, z]) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, dd), wallMat); m.position.set(x, y, z); objs.push(m); });
+    // 中線：黃色發光條
+    const mid = new THREE.Mesh(new THREE.PlaneGeometry(SOCM.halfX * 2, 0.12), new THREE.MeshBasicMaterial({ color: 0xffe066, transparent: true, opacity: 0.9, side: THREE.DoubleSide }));
+    mid.rotation.x = -Math.PI / 2; mid.position.set(0, 0.05, 0); objs.push(mid);
+    // 兩端門：球門環用「該端守方」的隊色（-z 藍方守 = 藍；+z 紅方守 = 紅）
+    soccerNet.goalBlue = makeMatchGoal(-SOCM.goalZ, SOCCER_TEAM_COLORS.blue); objs.push(soccerNet.goalBlue);
+    soccerNet.goalRed = makeMatchGoal(+SOCM.goalZ, SOCCER_TEAM_COLORS.red); objs.push(soccerNet.goalRed);
+    objs.forEach(o => scene.add(o));
+}
+function clampSoccerMatchBounds() {
+    const p = droneState.position, v = droneState.velocity, m = 0.4;  // 內縮一個機體半徑
+    if (p.x > SOCM.halfX - m) { p.x = SOCM.halfX - m; if (v.x > 0) v.x = 0; } else if (p.x < -SOCM.halfX + m) { p.x = -SOCM.halfX + m; if (v.x < 0) v.x = 0; }
+    if (p.z > SOCM.halfZ - m) { p.z = SOCM.halfZ - m; if (v.z > 0) v.z = 0; } else if (p.z < -SOCM.halfZ + m) { p.z = -SOCM.halfZ + m; if (v.z < 0) v.z = 0; }
+    if (p.y > SOCM.top - m) { p.y = SOCM.top - m; if (v.y > 0) v.y = 0; }
+}
+// 自己屬哪一隊 / 是否前鋒 → 更新狀態 + 自機彩帶
+function applyMyTeamRole(players) {
+    if (!players) return;
+    const me = players.find(p => p.id === wsState.myId);
+    if (!me) return;
+    if (me.team) soccerNet.myTeam = me.team;
+    soccerNet.myStriker = !!me.striker;
+}
+let _myRibbon = null;
+function updateMyRibbon() {
+    if (soccerNet.active && soccerNet.myStriker) {
+        if (!_myRibbon) { _myRibbon = makeStrikerRibbon(); scene.add(_myRibbon); }
+        _myRibbon.visible = true;
+        _myRibbon.position.set(droneState.position.x, droneState.position.y, droneState.position.z);
+        _myRibbon.rotation.y = droneState.rotation.y;
+    } else if (_myRibbon) {
+        _myRibbon.visible = false;
+    }
+}
+function updateSoccerPlayers(list) {
+    const seen = new Set();
+    (list || []).forEach(p => {
+        if (p.id === wsState.myId) return;   // 自己不畫分身
+        seen.add(p.id);
+        let o = soccerNet.others.get(p.id);
+        if (!o) { o = { group: makeSoccerDrone(p), target: {}, team: p.team, striker: !!p.striker }; soccerNet.others.set(p.id, o); }
+        o.target = { x: p.x, y: p.y, z: p.z, yaw: p.yaw };
+        if (o.team !== p.team) {   // 隊色變動（重新分隊）
+            o.team = p.team; const col = soccerTeamColorHex(p.team);
+            const b = o.group.userData.body; if (b) { b.material.color.setHex(col); b.material.emissive.setHex(col); }
+        }
+        if (o.striker !== !!p.striker) {   // 前鋒變動 → 彩帶顯隱
+            o.striker = !!p.striker;
+            if (o.group.userData.ribbon) o.group.userData.ribbon.visible = o.striker;
+        }
+    });
+    for (const [id, o] of soccerNet.others) {
+        if (!seen.has(id)) { scene.remove(o.group); soccerNet.others.delete(id); }
+    }
+}
+function applyMySoccerSpawn(spawns) {
+    const mine = (spawns || []).find(s => s.id === wsState.myId);
+    if (!mine) return;
+    droneState.position.set(mine.x, HOME_POSITION.y, mine.z);
+    droneState.velocity.set(0, 0, 0);
+    droneState.isGrounded = true; droneState.isFlying = false;
+    droneState.rotation.y = (mine.z > 0) ? 0 : Math.PI;  // 面向場中央（站 +z 看 -z=yaw0；站 -z 看 +z=yawπ）
+}
+function updateSoccerMatchHud() {
+    const lt = document.getElementById('level-timer');
+    if (!lt) return;
+    const s = soccerNet.scores || { blue: 0, red: 0 };
+    let t = '⏳ 等待開始';
+    if (soccerNet.status === 'running' && soccerNet.endTime) {
+        const rem = Math.max(0, Math.ceil((soccerNet.endTime - Date.now()) / 1000));
+        t = `⏱ ${Math.floor(rem / 60)}:${String(rem % 60).padStart(2, '0')}`;
+    } else if (soccerNet.status === 'countdown') t = '3-2-1…';
+    else if (soccerNet.status === 'done') t = '🏁 結束';
+    const meTeam = soccerNet.myTeam === 'red' ? '🔴紅' : (soccerNet.myTeam === 'blue' ? '🔵藍' : '—');
+    lt.textContent = `⚽ 🔵${s.blue} : ${s.red}🔴 ｜ ${t} ｜ 我:${meTeam}${soccerNet.myStriker ? '🎀前鋒' : '🛡防守'}`;
+}
+function showSoccerResult(msg) {
+    const s = msg.scores || soccerNet.scores;
+    soccerNet.status = 'done';
+    setStateHUD('🏁 足球結束！');
+    const txt = msg.winner === 'blue' ? `🔵 藍隊勝！${s.blue} : ${s.red}`
+        : (msg.winner === 'red' ? `🔴 紅隊勝！${s.blue} : ${s.red}` : `🤝 平手 ${s.blue} : ${s.red}`);
+    showToast(txt, 'success');
+    if (typeof playCompleteSound === 'function') playCompleteSound();
+    updateSoccerMatchHud();
+}
+function handleSoccerMessage(msg) {
+    switch (msg.type) {
+        case 'soccer_state':
+            soccerNet.status = msg.status; soccerNet.endTime = msg.endTime || 0;
+            if (msg.scores) soccerNet.scores = msg.scores;
+            applyMyTeamRole(msg.players);
+            updateSoccerPlayers(msg.players);
+            if (msg.spawns && (msg.status === 'countdown' || msg.status === 'idle')) applyMySoccerSpawn(msg.spawns);
+            updateSoccerMatchHud();
+            break;
+        case 'soccer_players':
+            applyMyTeamRole(msg.players);
+            updateSoccerPlayers(msg.players);
+            break;
+        case 'soccer_countdown':
+            soccerNet.status = 'countdown'; showCountdownNumber(msg.n);
+            break;
+        case 'soccer_go':
+            soccerNet.status = 'running'; soccerNet.endTime = msg.endTime || 0;
+            applyMyTeamRole(msg.players);
+            if (msg.spawns) applyMySoccerSpawn(msg.spawns);
+            showCountdownNumber('GO');
+            setStateHUD(soccerNet.myStriker ? '🎀 你是前鋒！穿過對方的門得分！' : '🛡 你是防守！擋住對方前鋒！');
+            updateSoccerMatchHud();
+            break;
+        case 'soccer_scores':
+            if (msg.status) soccerNet.status = msg.status;
+            if (msg.endTime) soccerNet.endTime = msg.endTime;
+            if (msg.scores) soccerNet.scores = msg.scores;
+            updateSoccerMatchHud();
+            break;
+        case 'soccer_end':
+            showSoccerResult(msg);
+            break;
+    }
+}
+function sendSoccerPos() {
+    if (!soccerNet.active || !wsState.ws || wsState.ws.readyState !== WebSocket.OPEN) return;
+    wsState.ws.send(JSON.stringify({
+        type: 'soccer_pos',
+        x: +droneState.position.x.toFixed(2), y: +droneState.position.y.toFixed(2),
+        z: +droneState.position.z.toFixed(2), yaw: +droneState.rotation.y.toFixed(3)
+    }));
+}
+function soccerNetTick() {
+    clampSoccerMatchBounds();
+    if (soccerNet.ball) soccerNet.ball.position.copy(droneState.position);  // 球形外框貼齊自機
+    updateMyRibbon();
+    // 內插其他玩家分身位置
+    soccerNet.others.forEach(o => {
+        if (o.target.x !== undefined) {
+            o.group.position.x += (o.target.x - o.group.position.x) * 0.25;
+            o.group.position.y += (o.target.y - o.group.position.y) * 0.25;
+            o.group.position.z += (o.target.z - o.group.position.z) * 0.25;
+            o.group.rotation.y = o.target.yaw || 0;
+        }
+        // 前鋒彩帶輕微擺動
+        if (o.group.userData.ribbon && o.group.userData.ribbon.visible) {
+            o.group.userData.ribbon.rotation.z = Math.sin(performance.now() * 0.005 + o.group.position.x) * 0.25;
+        }
+    });
+    updateSoccerMatchHud();
+}
+function enterSoccerMatch() {
+    if (soccerNet.active) return;
+    if (arena.active) exitArena();
+    if (SOCCER.active) exitSoccer();
+    soccerNet.active = true; soccerNet.status = 'idle';
+    soccerNet.myTeam = null; soccerNet.myStriker = false;
+    soccerNet.scores = { blue: 0, red: 0 };
+    if (currentMode !== MODE.MANUAL) setMode(MODE.MANUAL);
+    droneModel.scale.setScalar(SOCCER_MATCH_SCALE);
+    clearLevelObjects(); currentLevel = null; levelArmed = true; levelCountdownActive = false;
+    const introEl = document.getElementById('level-intro'); if (introEl) introEl.classList.remove('show');
+    ['mission-hud', 'progress-bar', 'balloon-hud', 'arena-hud', 'soccer-hud'].forEach(id => { const e = document.getElementById(id); if (e) e.style.display = 'none'; });
+    groundGrid.visible = false; ground.visible = false;
+    const td = document.getElementById('timer-display'); if (td) td.style.display = 'none';
+    document.querySelectorAll('.level-btn').forEach(b => b.classList.remove('active'));
+    const mb = document.getElementById('soccer-mp-btn'); if (mb) mb.classList.add('active');
+    buildSoccerMatchField();
+    if (!soccerNet.ball) soccerNet.ball = new THREE.Mesh(new THREE.IcosahedronGeometry(0.28, 1), new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.28 }));
+    if (soccerNet.ball.parent !== scene) scene.add(soccerNet.ball);
+    droneState.position.set(0, HOME_POSITION.y, 0); droneState.velocity.set(0, 0, 0);
+    droneState.isGrounded = true; droneState.isFlying = false; droneState.rotation.y = 0;
+    connectToTeacher();
+    if (wsState.ws && wsState.ws.readyState === WebSocket.OPEN) wsState.ws.send(JSON.stringify({ type: 'soccer_join' }));
+    if (soccerNet.posTimer) clearInterval(soccerNet.posTimer);
+    soccerNet.posTimer = setInterval(sendSoccerPos, 80);
+    updateSoccerMatchHud();
+    setStateHUD('⚽ 多人足球：等待老師開始…');
+    showToast('⚽ 進入多人足球對戰！等老師按開始', 'success');
+    console.log('[Soccer] 進入多人足球對戰');
+}
+function exitSoccerMatch() {
+    if (!soccerNet.active) return;
+    soccerNet.active = false;
+    if (wsState.ws && wsState.ws.readyState === WebSocket.OPEN) wsState.ws.send(JSON.stringify({ type: 'soccer_leave' }));
+    if (soccerNet.posTimer) { clearInterval(soccerNet.posTimer); soccerNet.posTimer = null; }
+    soccerNet.others.forEach(o => scene.remove(o.group)); soccerNet.others.clear();
+    clearSoccerMatchField();
+    if (soccerNet.ball && soccerNet.ball.parent) soccerNet.ball.parent.remove(soccerNet.ball);
+    if (_myRibbon) { _myRibbon.visible = false; }
+    droneModel.scale.setScalar(1);
+    groundGrid.visible = true; ground.visible = true;
+    const td = document.getElementById('timer-display'); if (td) td.style.display = '';
+    const lt = document.getElementById('level-timer'); if (lt) lt.textContent = '';
+    const mb = document.getElementById('soccer-mp-btn'); if (mb) mb.classList.remove('active');
+    console.log('[Soccer] 離開多人足球對戰');
 }
 
 // 玩家設好名字後，自動連線 + 註冊
