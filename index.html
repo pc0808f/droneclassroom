@@ -158,6 +158,23 @@
             margin-left: 6px;
             font-family: 'Consolas', monospace;
         }
+        /* T-105 連線狀態徽章：斷線顯示「🔴 連線中斷，正在重連…」、重連顯示「🟢 已恢復」1 秒後淡出 */
+        .conn-status {
+            display: none;
+            align-items: center;
+            gap: 4px;
+            margin-left: 8px;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 700;
+            vertical-align: middle;
+            transition: opacity 0.4s ease;
+        }
+        .conn-status.show { display: inline-flex; }
+        .conn-status.down { background: rgba(220,38,38,0.9); color: #fff; }
+        .conn-status.up { background: rgba(22,163,74,0.9); color: #fff; }
+        .conn-status.fade { opacity: 0; }
         .timer-badge {
             background: rgba(0,0,0,0.25);
             padding: 6px 14px;
@@ -1571,6 +1588,7 @@
     <div id="header">
         <div class="logo">CREAFLY<span class="accent">.</span></div>
         <span class="version-tag" id="version-tag">v1.5</span>
+        <span class="conn-status" id="conn-status" role="status" aria-live="polite"></span>
         <div class="subtitle">無人機教育模擬器 · Blockly 程式化飛行</div>
         <div class="header-right">
             <!-- 右上角控制鈕：用 flex 排版，不再各自 position:fixed 互相重疊 -->

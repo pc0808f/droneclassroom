@@ -952,6 +952,9 @@ function initPlayer() {
     // 啟動時檢查
     if (loadPlayer()) {
         hideLoginModal();
+        // T-105：已登入學生（重新整理 / 重開分頁）也要自動連線到老師 server，
+        // 否則重載後學生在老師後台會消失（過去只有手動按「開始」才連線）。
+        setTimeout(connectToTeacher, 200);
     } else {
         showLoginModal();
     }
@@ -3605,7 +3608,35 @@ const wsState = {
     ws: null,
     connected: false,
     reconnectTimer: null,
+    // T-105 重連：指數退避（3→6→12→24→30s 封頂）。每次成功連線後歸零。
+    backoff: [3000, 6000, 12000, 24000, 30000],
+    backoffIdx: 0,
+    everConnected: false,   // 曾連上過 → 之後斷線才顯示「斷線/重連」UI
+    wasDown: false,         // 目前是否處於斷線狀態（用來決定要不要顯示「已恢復」）
 };
+
+// T-105 連線狀態徽章：'down' 斷線中、'up' 已恢復（1 秒後淡出）、'hide' 隱藏
+let _connFadeTimer = null;
+function setConnStatus(state) {
+    const el = document.getElementById('conn-status');
+    if (!el) return;
+    if (_connFadeTimer) { clearTimeout(_connFadeTimer); _connFadeTimer = null; }
+    el.className = 'conn-status';
+    if (state === 'down') {
+        el.textContent = '🔴 連線中斷，正在重連…';
+        el.classList.add('show', 'down');
+    } else if (state === 'up') {
+        el.textContent = '🟢 已恢復';
+        el.classList.add('show', 'up');
+        // 1 秒後淡出
+        _connFadeTimer = setTimeout(() => {
+            el.classList.add('fade');
+            _connFadeTimer = setTimeout(() => { el.className = 'conn-status'; el.textContent = ''; }, 450);
+        }, 1000);
+    } else {
+        el.textContent = '';
+    }
+}
 
 function connectToTeacher() {
     // 已有「連線中(CONNECTING)」或「已連線(OPEN)」的 socket 就別再開一條，
@@ -3626,6 +3657,7 @@ function connectToTeacher() {
     ws.onopen = () => {
         if (wsState.ws !== ws) return;  // 已被更新的連線取代，忽略
         wsState.connected = true;
+        wsState.backoffIdx = 0;         // T-105：成功連線 → 退避歸零
         console.log('[v1.3 WS] 已連線到老師 server');
         // 註冊玩家（用本地 ws，確保送在「剛開啟的這條」連線上）
         if (player.name && player.emoji) {
@@ -3635,11 +3667,23 @@ function connectToTeacher() {
                 emoji: player.emoji
             }));
         }
-        showToast('🟢 已連線到課程', 'success');
+        // T-105：重連後把當前關卡進度補報給 server，老師後台才會即時一致
+        //（drone 位置/計時/過圈狀態是 client 權威、斷線期間頁面未重載 → 本來就不會丟）
+        if (typeof currentLevel !== 'undefined' && currentLevel && currentLevel.id) {
+            try { ws.send(JSON.stringify({ type: 'progress', levelId: currentLevel.id })); } catch (e) {}
+        }
         // 若正在大亂鬥（含重連），重新加入
         if (typeof arena !== 'undefined' && arena.active) {
             ws.send(JSON.stringify({ type: 'arena_join' }));
         }
+        // T-105：斷線過才顯示「已恢復」（首次連線只用 toast，不打擾）
+        if (wsState.wasDown) {
+            setConnStatus('up');
+            wsState.wasDown = false;
+        } else {
+            showToast('🟢 已連線到課程', 'success');
+        }
+        wsState.everConnected = true;
     };
     ws.onmessage = (ev) => {
         try {
@@ -3682,10 +3726,21 @@ function connectToTeacher() {
             }
         } catch (e) {}
     };
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
         if (wsState.ws !== ws) return;  // 舊連線關閉，不觸發重連
         wsState.connected = false;
-        console.log('[v1.3 WS] 連線關閉');
+        console.log('[v1.3 WS] 連線關閉', ev && ev.code);
+        // code 4000 = server 因「同名重連」主動取代本連線（別的裝置/分頁用同名上線）→ 不要再搶連線
+        if (ev && ev.code === 4000) {
+            setConnStatus('hide');
+            showToast('⚠️ 此名稱已在其他裝置登入', true);
+            return;
+        }
+        // T-105：曾連上過才顯示斷線徽章（避免初次載入 server 還沒起來就嚇到學生）
+        if (wsState.everConnected) {
+            wsState.wasDown = true;
+            setConnStatus('down');
+        }
         scheduleReconnect();
     };
     ws.onerror = (e) => {
@@ -3695,10 +3750,14 @@ function connectToTeacher() {
 
 function scheduleReconnect() {
     if (wsState.reconnectTimer) return;
+    // T-105：指數退避 3→6→12→24→30s（封頂）。每次成功連線 onopen 會把 backoffIdx 歸零。
+    const delay = wsState.backoff[Math.min(wsState.backoffIdx, wsState.backoff.length - 1)];
+    wsState.backoffIdx++;
+    console.log(`[v1.3 WS] ${delay / 1000}s 後重連（第 ${wsState.backoffIdx} 次）`);
     wsState.reconnectTimer = setTimeout(() => {
         wsState.reconnectTimer = null;
         connectToTeacher();
-    }, 3000);
+    }, delay);
 }
 
 function wsReportComplete(levelId, timeMs) {

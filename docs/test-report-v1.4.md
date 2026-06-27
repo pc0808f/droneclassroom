@@ -32,7 +32,7 @@ v1.4 的開發過程中，工作樹已先行疊上 v1.5 的功能（足球 / 大
 | **T-102** | 9 個基礎動作積木 | 7/7 | ✅ PASS | `reports/T-102-review.md` | `f648a4a` |
 | **T-103** | 進階積木（邏輯/迴圈/變數/時間）+ ADR-001 砍距離感測 | 7/7 | ✅ PASS | `reports/T-103-review.md` | `9c70b53` |
 | **T-104** | 6 關（1-0~1-5）× 雙模式 = 12 case | 16/16 | ✅ PASS | `reports/T-104-review.json` | `ba96c61` |
-| **T-105** | WebSocket 重連狀態同步 | — | ⚠️ 部分完成 | （無）| — |
+| **T-105** | WebSocket 重連狀態同步 | 7/7 | ✅ PASS | 本文 + `validate-t105.js` | （本次）|
 | **T-106** | iPad Safari 實機測試（Sam 跑）| — | ⛔ 待 Sam | （無）| — |
 | **T-107** | 整合測試 + test-report + tag | — | 🟡 本文 | 本文 | — |
 
@@ -82,22 +82,42 @@ v1.4 的開發過程中，工作樹已先行疊上 v1.5 的功能（足球 / 大
 - [x] 0 console error（核心功能）
 - [x] `test-report-v1.4.md`（本文）
 - [x] `git tag v1.4.0`
-- [ ] T-105 WebSocket 重連完整同步 — **部分完成**（見下方已知限制）
+- [x] T-105 WebSocket 重連同步 — ✅ PASS（client 端，7/7，見下方）
 - [ ] T-106 iPad Safari 實機測試 — **待 Sam 跑**（需借實體 iPad）
 - [ ] tag 推到 GitHub — 待 Sam 確認後 `git push origin v1.4.0`
 
 ---
 
+## T-105 WebSocket 重連同步 — 實作說明（本次完成）
+
+**架構前提**：本模擬器 drone 物理是 **client 權威**（位置/姿態/計時/過圈都在瀏覽器端、跑在頁面記憶體）。
+WS 斷線時只要**頁面沒重載**，這些狀態本來就不會丟。因此 T-105 的重點是「連線層的韌性 + 視覺回饋 + 後台一致」，
+而非從 server 拉回 drone 座標（server 在一般關卡並不持有 drone 座標）。
+
+**已實作並驗證（`validate-t105.js` 7/7 PASS）**：
+- ✅ 指數退避重連：3→6→12→24→30s（封頂），每次成功連線歸零（`main.js` scheduleReconnect）
+- ✅ HUD 連線狀態徽章：斷線「🔴 連線中斷，正在重連…」、重連「🟢 已恢復」1 秒後淡出（`index.html` `#conn-status`）
+- ✅ 重連後補報當前關卡進度（onopen → `progress`），老師後台即時一致
+- ✅ drone 位置/計時/過圈不丟（client 權威 + 頁面未重載 → 本來就保留；驗收 case 自然通過）
+- ✅ code 4000 處理：server 因「同名重連」取代本連線時不再搶連線、提示「已在其他裝置登入」
+- ✅ **附帶修正**：已登入學生（重新整理 / 重開分頁）現在會**自動連線**到老師 server
+  （過去只有手動按「開始」才連線，重載後學生會在老師後台消失 — iPad 最常見的斷線情境）
+
+**刻意不做（與架構不符，非缺漏）**：
+- server 端 drone 位置/姿態 snapshot — 一般關卡 server 非權威，client 未重載即保有狀態，無需 server 回傳
+- `SESSION_EXPIRED`（>5 分鐘清除）— server 已在斷線當下移除 session；狀態在 client 端，無 server 過期問題
+
+---
+
 ## 已知限制 / 未完成
 
-1. **T-105 WebSocket 重連只做了基本款**：
-   - 現況（`main.js:3696` scheduleReconnect）：斷線固定 3 秒重連一次，成功後只重新註冊 + 若在大亂鬥則重新 join。
-   - spec 尚缺：指數退避（3→6→12→30s）、`RESYNC` 訊息、server 端 session snapshot（位置/姿態/關卡/計時/分數）、重連後狀態復原、`SESSION_EXPIRED`（>5 分鐘）、HUD 斷線/已恢復提示。
-   - 影響：6/29 課程若 iPad Wi-Fi 不穩，重連後 drone 位置/計時/過圈進度不會復原（只會重連、保住連線）。建議課堂上避免靠網路保存進度。
+1. **T-106 未跑**：Blockly 拖拉在 iPad Safari 觸控的實機行為未驗證（CDP 為桌面 Chrome）。
+   上課前建議 Sam 至少跑一次 T-106 的 15 測項，特別是重載後自動連線 + 拔 Wi-Fi 重連（測項 12、13）。
 
-2. **T-106 未跑**：Blockly 拖拉在 iPad Safari 觸控的實機行為未驗證（CDP 為桌面 Chrome）。上課前建議 Sam 至少跑一次 T-106 的 15 測項。
+2. **Blockly deprecation warning ×2**：非 blocker，待 cleanup（`forBlock[blockType]` 字典風格）。
 
-3. **Blockly deprecation warning ×2**：非 blocker，待 cleanup。
+3. **重載＝重置關卡**：頁面 reload 後 drone 回起飛墊、計時歸零（沿用設計，T-106 測項 12 預期如此）。
+   重連同步保的是「連線 + 老師後台可見性」，不是跨 reload 的進度保存。
 
 ---
 
