@@ -1387,29 +1387,35 @@
             color: var(--creafly-yellow, #f1c40f);
         }
 
-        /* v1.3 玩家名稱 HUD（左上） */
-        #player-hud {
-            position: fixed;
-            top: 64px;     /* 緊貼 56px header 下方，當左上角最上面那一塊 */
-            left: 16px;
-            background: rgba(0,0,0,0.6);
-            color: #fff;
-            padding: 6px 10px;
-            border-radius: 6px;
-            z-index: 200;
-            font-size: 14px;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        #player-hud button {
-            background: none;
-            border: none;
-            color: rgba(255,255,255,0.6);
+        /* 帳號頭像（右上角，header 內最後一項）+ 下拉選單 */
+        #player-hud { position: relative; display: flex; align-items: center; }
+        #player-avatar {
+            width: 34px; height: 34px; padding: 0;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.25);
+            border: 2px solid rgba(255,255,255,0.65);
+            color: #fff; font-size: 18px; line-height: 1;
             cursor: pointer;
-            font-size: 12px;
+            display: flex; align-items: center; justify-content: center;
         }
-        #player-hud button:hover { color: var(--creafly-cyan, #4dd0e1); }
+        #player-avatar:hover { background: rgba(255,255,255,0.4); }
+        /* 下拉用 fixed 定位，避開 header 的 overflow:hidden 裁切 */
+        #player-dropdown {
+            display: none;
+            position: fixed; top: 50px; right: 14px; z-index: 300;
+            flex-direction: column; gap: 8px;
+            background: rgba(10,37,64,0.97); color: #fff;
+            padding: 12px 14px; border-radius: 10px; min-width: 150px;
+            box-shadow: 0 6px 24px rgba(0,0,0,0.45);
+        }
+        #player-hud.open #player-dropdown { display: flex; }
+        #player-dropdown #player-name-display { font-size: 15px; font-weight: 700; }
+        #player-dropdown #player-rename {
+            background: rgba(255,255,255,0.12); color: #fff;
+            border: 1px solid rgba(255,255,255,0.25);
+            border-radius: 6px; padding: 6px 10px; cursor: pointer; font-size: 13px;
+        }
+        #player-dropdown #player-rename:hover { background: var(--creafly-cyan, #4dd0e1); color: #0a1929; }
 
         /* v1.3 emoji 選擇 */
         .emoji-btn {
@@ -1620,7 +1626,14 @@
             <button id="view-btn" class="header-btn" title="切換 第一視角 / 第三人稱（鍵盤 C）">👁 視角：第三人稱</button>
             <button id="connect-gamepad-btn" class="header-btn" title="用藍牙連線 pyController 實體搖桿（需 HTTPS；iPad 請用 Bluefy）">🎮 連線搖桿</button>
             <button id="fullscreen-btn" class="header-btn" title="全螢幕（iPad / 桌機）">⛶ 全螢幕</button>
-            <div class="timer-badge" id="timer-display">0.0s</div>
+            <!-- 帳號：右上角 emoji 頭像 + 下拉（取代原本冗餘的計時器，計時看左下角即可） -->
+            <div id="player-hud" style="display:none;">
+                <button id="player-avatar" title="帳號"><span id="player-avatar-emoji">🙂</span></button>
+                <div id="player-dropdown">
+                    <span id="player-name-display"></span>
+                    <button id="player-rename" title="改名">✏️ 改名</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -1887,11 +1900,6 @@
     <div id="arena-scoreboard"><div class="arena-row">等待玩家加入…</div></div>
 </div>
 
-<!-- v1.3 玩家名稱 HUD -->
-<div id="player-hud" style="display:none;">
-    <span id="player-name-display"></span>
-    <button id="player-rename" title="改名">✏️</button>
-</div>
 
 <!-- 搖桿校正 Wizard -->
 <div id="calib-overlay">

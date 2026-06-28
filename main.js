@@ -942,6 +942,8 @@ function hideLoginModal() {
         display.textContent = `${player.name}${player.emoji}`;
         hud.style.display = 'flex';
     }
+    const av = document.getElementById('player-avatar-emoji');
+    if (av) av.textContent = player.emoji || '🙂';
 }
 
 function initPlayer() {
@@ -966,8 +968,17 @@ function initPlayer() {
     // 延遲一點連線
     setTimeout(connectToTeacher, 200);
 });
-    // 改名
+    // 帳號頭像：點擊開合下拉
+    const hud = document.getElementById('player-hud');
+    const avatar = document.getElementById('player-avatar');
+    if (avatar && hud) {
+        avatar.addEventListener('click', (e) => { e.stopPropagation(); hud.classList.toggle('open'); });
+        // 點下拉以外的地方 → 收起
+        document.addEventListener('click', (e) => { if (!hud.contains(e.target)) hud.classList.remove('open'); });
+    }
+    // 改名（在下拉內）→ 收起下拉、開登入框
     document.getElementById('player-rename').addEventListener('click', () => {
+        if (hud) hud.classList.remove('open');
         showLoginModal();
     });
     // 啟動時檢查
@@ -2534,10 +2545,6 @@ function updateRingHUD() {
 
 function updateStatus() {
     document.getElementById('hud-alt').textContent = droneState.position.y.toFixed(1);
-    if (programState.running && programState.ringsCollected < programState.totalRings) {
-        const elapsed = ((Date.now() - programState.startTime) / 1000).toFixed(1);
-        document.getElementById('timer-display').textContent = elapsed + 's';
-    }
     // 搖桿即時值
     if (gamepadState.connected) {
         const el = document.getElementById('gamepad-axes');
@@ -3576,11 +3583,6 @@ function updateLevelTimer() {
     const t = elapsed.toFixed(1);
     const timerEl = document.getElementById('level-timer');
     if (timerEl) timerEl.textContent = `⏱ ${t}s`;
-    // 右上角徽章同步顯示同一個關卡計時（程式執行中由 updateStatus 顯示程式計時，不覆蓋）
-    if (!programState.running) {
-        const td = document.getElementById('timer-display');
-        if (td) td.textContent = `${t}s`;
-    }
 }
 
 // v1.3 靜音按鈕
