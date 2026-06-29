@@ -218,7 +218,7 @@ function arenaEnd(winner) {
 //   球＝無人機本身（無共用球）；只有前鋒穿對方門得分（計分在 T-503）。
 //   場地常數需與 client（T-502）同一份：長軸 z（兩門連線）、寬 x、中線 z=0。
 // =====================================================================
-const SOCCER_FIELD = { halfX: 1.5, halfZ: 3, top: 3, goalZ: 2.8, goalY: 1.5, goalR: 1.2, midZ: 0 };
+const SOCCER_FIELD = { halfX: 7, halfZ: 14, top: 12, goalZ: 10, goalY: 9, goalR: 1.2, midZ: 0 };
 const SOCCER_DURATION_DEFAULT = 180;   // 1 局 3 分鐘（測試可送較短 durationSec）
 // 每隊站位端 / 攻門 / 守門（z 軸）：藍隊站 -z 端、攻 +z 門；紅隊站 +z 端、攻 -z 門
 const SOCCER_TEAMS = {

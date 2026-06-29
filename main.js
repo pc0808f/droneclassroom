@@ -343,9 +343,9 @@ const SOC = { halfX: 7, halfZ: 14, top: 12, goalZ: 10, goalY: 9, goalR: 1.2, goa
 const SOCCER_BALL_R = 0.8;       // 球形保護框半徑(也當足球碰撞半徑)
 const SOCCER_DRONE_SCALE = 0.65; // 足球模式把飛機縮小,讓場地相對變大、比例正確
 // ⚽ 多人足球對戰（連線）—— 狀態宣告在前段避免 TDZ（animate / isManualLocked 會用到）。
-// SOCM 場地常數須與 server.js 的 SOCCER_FIELD 同一份（6×3×3、中線 z=0、兩端門）。
-const SOCM = { halfX: 1.5, halfZ: 3, top: 3, goalZ: 2.8, goalY: 1.5, goalR: 1.2 };
-const SOCCER_MATCH_SCALE = 0.32;  // 6×3×3 小場地把飛機縮更小（比單人練習場小很多）
+// SOCM 場地常數須與 server.js 的 SOCCER_FIELD 同一份。尺寸對齊單人練習場（SOC）→ 飛機/場地比例一致、中線 z=0、兩端門。
+const SOCM = { halfX: 7, halfZ: 14, top: 12, goalZ: 10, goalY: 9, goalR: 1.2 };
+const SOCCER_MATCH_SCALE = 0.65;  // 與單人練習場 SOCCER_DRONE_SCALE 一致 → 飛機相對場地比例正確
 const soccerNet = {
     active: false,
     status: 'idle',            // idle | countdown | running | done
@@ -3154,8 +3154,8 @@ function animate() {
         // 多人足球：窄邊定點隊伍視角（高 1.5m，站自隊窄邊往場內看；紅站 +z 看 -z、藍站 -z 看 +z）
         if (!droneModel.visible) droneModel.visible = true;
         const sign = (soccerNet.myTeam === 'red') ? 1 : -1;
-        camera.position.set(0, SOCM.goalY, sign * (SOCM.halfZ + 2.4));
-        camera.lookAt(0, SOCM.goalY - 0.3, -sign * SOCM.halfZ);
+        camera.position.set(0, SOCM.goalY - 3, sign * (SOCM.halfZ + 9));   // 與單人練習場同視角，依隊伍站窄邊
+        camera.lookAt(0, SOCM.goalY - 1, -sign * 5);
     } else if (SOCCER.active && !cameraMode.fpv) {
         // 足球：窄邊定點視角（站在己方端線後方一大步、略高，看向場內/遠端門）
         if (!droneModel.visible) droneModel.visible = true;
@@ -4446,7 +4446,7 @@ function updateSoccerHud() {
 
 // =============================================================================
 // 16b. ⚽ 多人足球對戰（連線；伺服器權威見 server.js T-501）
-//      重用 Arena 的分身/內插/名牌概念；場地 6×3×3 與 server SOCCER_FIELD 對齊。
+//      重用 Arena 的分身/內插/名牌概念；場地尺寸與單人練習場（SOC）一致、與 server SOCCER_FIELD 對齊。
 //      計分/穿門偵測在 T-503；本段負責：進場連線、他人分身（隊色+前鋒彩帶）、窄邊隊伍視角。
 // =============================================================================
 const SOCCER_TEAM_COLORS = { blue: 0x3b82f6, red: 0xff4444 };
@@ -4467,19 +4467,20 @@ function makeStrikerRibbon() {
 function makeSoccerDrone(p) {
     const g = new THREE.Group();
     const col = new THREE.Color(soccerTeamColorHex(p.team));
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.14, 0.5), new THREE.MeshPhongMaterial({ color: col, emissive: col, emissiveIntensity: 0.3 }));
+    // 分身尺寸對齊自機（droneModel@SOCCER_MATCH_SCALE，約 1.5 寬）→ 與場地同比例、不會像小點
+    const body = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.4, 1.4), new THREE.MeshPhongMaterial({ color: col, emissive: col, emissiveIntensity: 0.3 }));
     g.add(body);
-    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.22, 10), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-    nose.rotation.x = Math.PI / 2; nose.position.z = -0.33; g.add(nose);
+    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.6, 10), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+    nose.rotation.x = Math.PI / 2; nose.position.z = -0.92; g.add(nose);
     g.userData.body = body;
-    g.add(makeNameLabel((p.emoji || '') + (p.name || '?')));
-    const ribbon = makeStrikerRibbon(); ribbon.visible = !!p.striker; g.add(ribbon); g.userData.ribbon = ribbon;
+    const label = makeNameLabel((p.emoji || '') + (p.name || '?')); label.position.y = 1.9; g.add(label);
+    const ribbon = makeStrikerRibbon(); ribbon.scale.setScalar(2.4); ribbon.visible = !!p.striker; g.add(ribbon); g.userData.ribbon = ribbon;
     scene.add(g);
     return g;
 }
 function makeMatchGoal(z, color) {
     const ring = new THREE.Mesh(
-        new THREE.TorusGeometry(SOCM.goalR, 0.07, 14, 40),
+        new THREE.TorusGeometry(SOCM.goalR, 0.11, 14, 40),
         new THREE.MeshPhongMaterial({ color, emissive: color, emissiveIntensity: 0.45, shininess: 80 }));
     ring.position.set(0, SOCM.goalY, z);   // 孔朝 z → 沿長軸穿過
     ring.castShadow = true;
@@ -4513,7 +4514,7 @@ function buildSoccerMatchField() {
     objs.forEach(o => scene.add(o));
 }
 function clampSoccerMatchBounds() {
-    const p = droneState.position, v = droneState.velocity, m = 0.4;  // 內縮一個機體半徑
+    const p = droneState.position, v = droneState.velocity, m = SOCCER_BALL_R;  // 內縮一個球框半徑（與單人練習場一致）
     if (p.x > SOCM.halfX - m) { p.x = SOCM.halfX - m; if (v.x > 0) v.x = 0; } else if (p.x < -SOCM.halfX + m) { p.x = -SOCM.halfX + m; if (v.x < 0) v.x = 0; }
     if (p.z > SOCM.halfZ - m) { p.z = SOCM.halfZ - m; if (v.z > 0) v.z = 0; } else if (p.z < -SOCM.halfZ + m) { p.z = -SOCM.halfZ + m; if (v.z < 0) v.z = 0; }
     if (p.y > SOCM.top - m) { p.y = SOCM.top - m; if (v.y > 0) v.y = 0; }
@@ -4700,7 +4701,7 @@ function enterSoccerMatch() {
     document.querySelectorAll('.level-btn').forEach(b => b.classList.remove('active'));
     const mb = document.getElementById('soccer-mp-btn'); if (mb) mb.classList.add('active');
     buildSoccerMatchField();
-    if (!soccerNet.ball) soccerNet.ball = new THREE.Mesh(new THREE.IcosahedronGeometry(0.28, 1), new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.28 }));
+    if (!soccerNet.ball) soccerNet.ball = new THREE.Mesh(new THREE.IcosahedronGeometry(SOCCER_BALL_R, 1), new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.28 }));
     if (soccerNet.ball.parent !== scene) scene.add(soccerNet.ball);
     droneState.position.set(0, HOME_POSITION.y, 0); droneState.velocity.set(0, 0, 0);
     droneState.isGrounded = true; droneState.isFlying = false; droneState.rotation.y = 0;
